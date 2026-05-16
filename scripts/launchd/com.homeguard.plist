@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>com.homeguard</string>
+
+    <!-- Program and arguments -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/homeguard</string>
+        <string>/usr/local/etc/homeguard/homeguard.toml</string>
+    </array>
+
+    <!-- Start on boot -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash (but not on clean exit) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/usr/local/etc/homeguard</string>
+
+    <!-- Log files -->
+    <key>StandardOutPath</key>
+    <string>/var/log/homeguard/homeguard.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/homeguard/homeguard.err</string>
+
+    <!-- Run as root (required for binding to privileged ports and PF access) -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <key>GroupName</key>
+    <string>wheel</string>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>info</string>
+        <key>RUST_BACKTRACE</key>
+        <string>1</string>
+    </dict>
+
+    <!-- Resource limits (increase file descriptor limit for many connections) -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+
+    <!-- Throttle restart (wait 10 seconds before restarting) -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Process type -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

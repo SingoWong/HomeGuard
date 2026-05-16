@@ -1,0 +1,123 @@
+# HomeGuard Configuration
+# Home Network Gateway for Parental Control and Proxy Management
+
+[general]
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+# Data directory for SQLite database
+data_dir = "/var/lib/homeguard"
+
+[dns]
+# DNS server listen address
+# Use 127.0.0.1:5353 for production (PF redirects to this port)
+# Use 0.0.0.0:53 for direct DNS server mode
+listen = "127.0.0.1:5353"
+# Upstream DNS servers
+upstream = [
+    "8.8.8.8:53",
+    "223.5.5.5:53",
+]
+# Enable FakeDNS for transparent proxy
+fake_dns = true
+# FakeDNS IP pool (198.18.0.0/15 is reserved for documentation)
+fake_dns_pool = "198.18.0.0/15"
+# DNS cache size
+cache_size = 10000
+# DNS cache TTL in seconds
+cache_ttl = 300
+
+[transparent]
+# Transparent proxy listen address
+# Use 127.0.0.1:7893 for production (PF redirects to this port)
+listen = "127.0.0.1:7893"
+# Handle UDP traffic
+handle_udp = false
+
+[proxy]
+# Shadowsocks proxies
+# [[proxy.shadowsocks]]
+# name = "ss-hk"
+# server = "hk.example.com"
+# port = 8388
+# password = "your-password"
+# method = "chacha20-ietf-poly1305"
+
+# Proxy groups
+# [[proxy.group]]
+# name = "Proxy"
+# type = "select"
+# proxies = ["ss-hk", "DIRECT"]
+
+[rules]
+# Rules directory
+rules_dir = "./config/rules"
+# GeoIP database path (optional)
+# geoip_db = "./data/GeoLite2-Country.mmdb"
+
+# Rule list (processed in order)
+rule_list = [
+    # Parental control - block inappropriate content
+    # "RULE-SET,blocklist/porn.txt,REJECT",
+    # "RULE-SET,blocklist/gambling.txt,REJECT",
+
+    # Time-based control for games
+    # "RULE-SET,blocklist/games.txt,REJECT,schedule=school_hours",
+
+    # Proxy rules
+    # "DOMAIN-SUFFIX,google.com,Proxy",
+    # "DOMAIN-KEYWORD,youtube,Proxy",
+
+    # Direct rules
+    # "DOMAIN-SUFFIX,cn,DIRECT",
+    # "GEOIP,CN,DIRECT",
+
+    # Final rule (required)
+    "FINAL,DIRECT",
+]
+
+# Time schedules
+# [schedules.school_hours]
+# days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+# start = "08:00"
+# end = "16:00"
+
+# [schedules.sleep_time]
+# days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+# start = "22:00"
+# end = "07:00"
+
+# Device configurations
+# [devices.child_ipad]
+# ip = "192.168.0.100"
+# mac = "AA:BB:CC:DD:EE:FF"
+# name = "Child iPad"
+# device_type = "child"
+# schedules = ["school_hours", "sleep_time"]
+# extra_blocklists = ["games", "social"]
+
+# Parental control settings
+[parental]
+# Enable parental control
+enabled = false
+# Blocklist directory (relative to config file or absolute path)
+blocklist_dir = "blocklists"
+# Global categories blocked for ALL devices (including adults)
+global_categories = []
+# Default policy for unknown devices: "allow", "block_if_listed", "block_all"
+default_policy = "allow"
+# Log blocked requests
+log_blocked = true
+
+# Storage settings
+[storage]
+# SQLite database path for configuration storage
+database = "/var/lib/homeguard/config.db"
+
+# Logging settings
+[logging]
+# Access log directory
+log_dir = "/var/lib/homeguard/logs"
+# Log granularity: 1=all, 2=blocked+proxy, 3=blocked only
+granularity = 2
+# Log retention in days (0 = keep forever)
+retention_days = 30
