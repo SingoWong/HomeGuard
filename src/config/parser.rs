@@ -31,6 +31,21 @@ pub fn load_config_from_str(content: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+/// Read a rule list file into one string per non-empty / non-comment line.
+///
+/// The returned vector is fed directly to `RuleParser::load_rules`, which already
+/// understands `#` / `//` comments and `RULE-SET,<path>,<policy>` references.
+/// We still strip comments here so the count printed at startup is accurate.
+pub fn load_rule_file<P: AsRef<Path>>(path: P) -> Result<Vec<String>, ConfigError> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(content
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("//"))
+        .map(|line| line.to_string())
+        .collect())
+}
+
 /// Validate configuration
 fn validate_config(config: &Config) -> Result<(), ConfigError> {
     // Validate DNS upstream
@@ -181,11 +196,47 @@ upstream = ["8.8.8.8:53"]
 [proxy]
 
 [rules]
-rule_list = ["FINAL,DIRECT"]
+rule_file = "./rules.list"
 "#;
         let config = load_config_from_str(config_str).unwrap();
         assert_eq!(config.general.log_level, "info");
         assert_eq!(config.dns.upstream.len(), 1);
+        assert_eq!(
+            config.rules.rule_file,
+            std::path::PathBuf::from("./rules.list")
+        );
+    }
+
+    #[test]
+    fn test_rule_file_default_when_omitted() {
+        let config_str = r#"
+[general]
+[dns]
+upstream = ["8.8.8.8:53"]
+[transparent]
+[proxy]
+[rules]
+"#;
+        let config = load_config_from_str(config_str).unwrap();
+        assert_eq!(
+            config.rules.rule_file,
+            std::path::PathBuf::from("./rules.list")
+        );
+    }
+
+    #[test]
+    fn test_load_rule_file_strips_comments_and_blanks() {
+        let tmp = std::env::temp_dir().join("homeguard_test_rules.list");
+        std::fs::write(
+            &tmp,
+            "# header comment\n\n  DOMAIN,a.com,DIRECT  \n// another comment\nFINAL,DIRECT\n",
+        )
+        .unwrap();
+
+        let rules = load_rule_file(&tmp).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+
+        assert_eq!(rules, vec!["DOMAIN,a.com,DIRECT", "FINAL,DIRECT"]);
     }
 
     #[test]
@@ -220,10 +271,7 @@ proxies = ["ss-hk", "DIRECT"]
 [rules]
 rules_dir = "./rules"
 geoip_db = "./data/GeoLite2-Country.mmdb"
-rule_list = [
-    "DOMAIN-SUFFIX,google.com,Proxy",
-    "FINAL,DIRECT",
-]
+rule_file = "./rules.list"
 
 [schedules.school_hours]
 days = ["Mon", "Tue", "Wed", "Thu", "Fri"]

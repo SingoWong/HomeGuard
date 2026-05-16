@@ -32,46 +32,49 @@ cache_ttl = 300
 listen = "127.0.0.1:7893"
 
 [proxy]
-# Shadowsocks proxies
-# [[proxy.shadowsocks]]
-# name = "ss-hk"
-# server = "hk.example.com"
-# port = 8388
-# password = "your-password"
-# method = "chacha20-ietf-poly1305"
+# Shadowsocks proxies (one upstream per region; underlying server identifiers).
+# Replace `server`, `port`, `password`, `method` with your real provider details.
+[[proxy.shadowsocks]]
+name = "ss-hk-1"
+server = "hk.example.com"
+port = 8388
+password = "your-hk-password"
+method = "chacha20-ietf-poly1305"
 
-# Proxy groups
-# [[proxy.group]]
-# name = "Proxy"
-# type = "select"
-# proxies = ["ss-hk", "DIRECT"]
+[[proxy.shadowsocks]]
+name = "ss-us-1"
+server = "us.example.com"
+port = 8388
+password = "your-us-password"
+method = "chacha20-ietf-poly1305"
+
+# Proxy groups are what `rules.list` references (policy names must match here
+# in upper-case — see Policy::from_str). One group per region; if you add more
+# servers later (e.g. ss-hk-2), append them to `proxies` and pick `url-test`
+# to auto-select the lowest-latency one.
+[[proxy.group]]
+name = "SS-HK"
+type = "select"
+proxies = ["ss-hk-1"]
+
+[[proxy.group]]
+name = "SS-US"
+type = "select"
+proxies = ["ss-us-1"]
 
 [rules]
-# Rules directory
-rules_dir = "./config/rules"
-# GeoIP database path (optional)
+# Main rule entry file (relative paths resolve against this config file).
+# Rules change much more often than infrastructure settings, so they live in
+# a plain-text file — one rule per line, `#` for comments, easy to diff/version.
+rule_file = "./rules.list"
+# Root directory for RULE-SET sub-files referenced from rule_file.
+# Lets you split rules.list into themed pieces, e.g. inside rules.list:
+#   RULE-SET,proxy-ai.list,SS-US
+#   RULE-SET,direct-cn.list,DIRECT
+# would look up `<rules_dir>/proxy-ai.list` and `<rules_dir>/direct-cn.list`.
+rules_dir = "./rules"
+# GeoIP database path (optional, enables GEOIP rules)
 # geoip_db = "./data/GeoLite2-Country.mmdb"
-
-# Rule list (processed in order)
-rule_list = [
-    # Parental control - block inappropriate content
-    # "RULE-SET,blocklist/porn.txt,REJECT",
-    # "RULE-SET,blocklist/gambling.txt,REJECT",
-
-    # Time-based control for games
-    # "RULE-SET,blocklist/games.txt,REJECT,schedule=school_hours",
-
-    # Proxy rules
-    # "DOMAIN-SUFFIX,google.com,Proxy",
-    # "DOMAIN-KEYWORD,youtube,Proxy",
-
-    # Direct rules
-    # "DOMAIN-SUFFIX,cn,DIRECT",
-    # "GEOIP,CN,DIRECT",
-
-    # Final rule (required)
-    "FINAL,DIRECT",
-]
 
 # Time schedules
 # [schedules.school_hours]

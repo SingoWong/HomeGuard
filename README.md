@@ -83,11 +83,8 @@ enabled = true
 blocklist_dir = "blocklists"
 
 [rules]
-rule_list = [
-    "DOMAIN-SUFFIX,google.com,Proxy",
-    "GEOIP,CN,DIRECT",
-    "FINAL,DIRECT",
-]
+# Rules live in their own plain-text file; this TOML only points at it.
+rule_file = "./rules.list"
 ```
 
 ### Service Management
@@ -120,7 +117,10 @@ homeguard/
 │   ├── control/             # Parental control
 │   └── storage/             # SQLite config, file logging
 ├── config/
-│   └── homeguard.toml       # Configuration template
+│   ├── homeguard.toml       # Infrastructure configuration (stable)
+│   ├── rules.list           # Routing rules (changes often, edited solo)
+│   ├── rules/               # Optional RULE-SET files referenced from rules.list
+│   └── blocklists/          # Category blocklists for parental control
 ├── scripts/
 │   ├── install.sh           # Installation script
 │   ├── uninstall.sh         # Uninstallation script
@@ -131,18 +131,18 @@ homeguard/
 
 ## Documentation
 
-| Document                                                        | Description                            |
-| --------------------------------------------------------------- | -------------------------------------- |
-| [00-overview.md](docs/00-overview.md)                           | Project overview and phase breakdown   |
+| Document                                                        | Description                               |
+| --------------------------------------------------------------- | ----------------------------------------- |
+| [00-overview.md](docs/00-overview.md)                           | Project overview and phase breakdown      |
 | [network.md](docs/network.md)                                   | End-to-end packet flow & PF redirect 原理 |
-| [phase1-project-structure.md](docs/phase1-project-structure.md) | Project framework and configuration    |
-| [phase2-dns-service.md](docs/phase2-dns-service.md)             | DNS server, cache, FakeDNS             |
-| [phase3-rule-engine.md](docs/phase3-rule-engine.md)             | Rule engine design                     |
-| [phase4-transparent-proxy.md](docs/phase4-transparent-proxy.md) | Transparent proxy design               |
-| [phase5-shadowsocks.md](docs/phase5-shadowsocks.md)             | Shadowsocks implementation             |
-| [phase6-parental-control.md](docs/phase6-parental-control.md)   | Parental control design                |
-| [phase7-storage.md](docs/phase7-storage.md)                     | Storage design (SQLite + file logging) |
-| [phase8-deployment.md](docs/phase8-deployment.md)               | Deployment scripts design              |
+| [phase1-project-structure.md](docs/phase1-project-structure.md) | Project framework and configuration       |
+| [phase2-dns-service.md](docs/phase2-dns-service.md)             | DNS server, cache, FakeDNS                |
+| [phase3-rule-engine.md](docs/phase3-rule-engine.md)             | Rule engine design                        |
+| [phase4-transparent-proxy.md](docs/phase4-transparent-proxy.md) | Transparent proxy design                  |
+| [phase5-shadowsocks.md](docs/phase5-shadowsocks.md)             | Shadowsocks implementation                |
+| [phase6-parental-control.md](docs/phase6-parental-control.md)   | Parental control design                   |
+| [phase7-storage.md](docs/phase7-storage.md)                     | Storage design (SQLite + file logging)    |
+| [phase8-deployment.md](docs/phase8-deployment.md)               | Deployment scripts design                 |
 
 ## Configuration Reference
 
@@ -159,14 +159,52 @@ homeguard/
 
 ### Rule Types
 
-| Type             | Example                          | Description          |
-| ---------------- | -------------------------------- | -------------------- |
-| `DOMAIN`         | `DOMAIN,example.com,DIRECT`      | Exact domain match   |
-| `DOMAIN-SUFFIX`  | `DOMAIN-SUFFIX,google.com,Proxy` | Domain suffix match  |
-| `DOMAIN-KEYWORD` | `DOMAIN-KEYWORD,youtube,Proxy`   | Domain keyword match |
-| `IP-CIDR`        | `IP-CIDR,192.168.0.0/16,DIRECT`  | IP range match       |
-| `GEOIP`          | `GEOIP,CN,DIRECT`                | GeoIP country match  |
-| `FINAL`          | `FINAL,DIRECT`                   | Default policy       |
+Rules live in [config/rules.list](config/rules.list), **one rule per line**, with `#` or `//` for comments. This file is intentionally kept out of `homeguard.toml` because rules change much more frequently than infrastructure settings — editing/diffing/version-controlling a flat list is far easier than maintaining a TOML array.
+
+```text
+# Order matters: the first match wins.
+DOMAIN-SUFFIX,google.com,SS-HK
+DOMAIN-KEYWORD,youtube,SS-HK
+GEOIP,CN,DIRECT
+RULE-SET,blocklist/games.list,REJECT,schedule=school_hours
+FINAL,DIRECT
+```
+
+| Type             | Example                                | Description                                                   |
+| ---------------- | -------------------------------------- | ------------------------------------------------------------- |
+| `DOMAIN`         | `DOMAIN,example.com,DIRECT`            | Exact domain match                                            |
+| `DOMAIN-SUFFIX`  | `DOMAIN-SUFFIX,google.com,SS-HK`       | Domain suffix match                                           |
+| `DOMAIN-KEYWORD` | `DOMAIN-KEYWORD,youtube,SS-HK`         | Domain keyword match                                          |
+| `IP-CIDR`        | `IP-CIDR,192.168.0.0/16,DIRECT`        | IP range match                                                |
+| `GEOIP`          | `GEOIP,CN,DIRECT`                      | GeoIP country match (requires `[rules].geoip_db`)             |
+| `RULE-SET`       | `RULE-SET,blocklist/games.list,REJECT` | Include another file; path is relative to `[rules].rules_dir` |
+| `FINAL`          | `FINAL,DIRECT`                         | Catch-all; required, exactly one, last line                   |
+
+Optional trailing options after the policy, comma-separated:
+
+- `no-resolve` — for `IP-CIDR`/`GEOIP`: only match when the IP is already known, skip the DNS lookup
+- `schedule=<name>` — only apply during the named schedule (see Parental Control)
+
+**Layout of `config/`:**
+
+```
+config/
+├── homeguard.toml          # Infrastructure (changes rarely)
+├── rules.list              # Main rule entry — top-level routing strategy
+├── rules/                  # Sub-files referenced by `RULE-SET` in rules.list
+│   └── README.md           #   ↑ format and conventions for this directory
+└── blocklists/             # Parental-control category lists (separate code path)
+    ├── custom/
+    └── opensource/
+```
+
+The `rules/` directory is the root for **all** `RULE-SET` references —
+`RULE-SET,proxy-ai.list,SS-US` looks up `config/rules/proxy-ai.list`. Sub-paths
+like `RULE-SET,blocklist/games.list,REJECT` are fine too. See
+[config/rules/README.md](config/rules/README.md) for the sub-file format
+(no policy column per line; policy is supplied once at the `RULE-SET` call site).
+
+After editing `rules.list` or any sub-file, restart the service (`sudo launchctl kickstart -k system/com.homeguard`); hot-reload is not implemented yet.
 
 ### Parental Control
 
@@ -220,12 +258,12 @@ Building and starting the binary on the Mac Mini / dedicated server is only half
 
 Throughout the examples we assume:
 
-| Role               | IP            | Notes                                |
-| ------------------ | ------------- | ------------------------------------ |
-| Router (LAN side)  | `192.168.0.1` | Existing home router                 |
-| HomeGuard host     | `192.168.0.5` | Mac Mini / dedicated server (static) |
-| DHCP pool          | `.100`–`.200` | For normal devices                   |
-| Child device (iPad) | `192.168.0.50` | DHCP-reserved by MAC                |
+| Role                | IP             | Notes                                |
+| ------------------- | -------------- | ------------------------------------ |
+| Router (LAN side)   | `192.168.0.1`  | Existing home router                 |
+| HomeGuard host      | `192.168.0.5`  | Mac Mini / dedicated server (static) |
+| DHCP pool           | `.100`–`.200`  | For normal devices                   |
+| Child device (iPad) | `192.168.0.50` | DHCP-reserved by MAC                 |
 
 Adjust to your own subnet.
 
@@ -264,13 +302,13 @@ Two things need to change on the router. The wording differs per vendor (look un
 
 **(a) Shrink the DHCP pool so it does not overlap the static IP**
 
-| Before              | After                                |
-| ------------------- | ------------------------------------ |
-| `192.168.0.2 – 254` | `192.168.0.100 – 192.168.0.200`      |
+| Before              | After                           |
+| ------------------- | ------------------------------- |
+| `192.168.0.2 – 254` | `192.168.0.100 – 192.168.0.200` |
 
 This leaves `.2 – .99` available for hand-assigned static IPs (HomeGuard host, NAS, printers, child devices, …) and prevents DHCP from ever handing out `.5` to someone else.
 
-**(b) Push HomeGuard as the Gateway *and* DNS to every DHCP client**
+**(b) Push HomeGuard as the Gateway _and_ DNS to every DHCP client**
 
 In the router's DHCP settings, override the two values it advertises:
 
@@ -287,7 +325,7 @@ After saving, force a DHCP renew on each client (Wi-Fi off → on, or `sudo ipco
 
 Parental control identifies who is making a request by **source IP**. If a child's iPad gets a different IP each time it reconnects, the schedule and blocklists silently stop applying to it.
 
-**Recommended: DHCP reservation on the router** (a.k.a. *Static DHCP*, *Address Reservation*, *MAC Binding*):
+**Recommended: DHCP reservation on the router** (a.k.a. _Static DHCP_, _Address Reservation_, _MAC Binding_):
 
 1. Find the child device's Wi-Fi MAC address:
    - iOS: Settings → General → About → Wi-Fi Address
@@ -311,7 +349,7 @@ Parental control identifies who is making a request by **source IP**. If a child
 
 **Why not just set a manual IP on the iPad itself?** You can, but a kid can change it back in 30 seconds. Reservation on the router can't be bypassed from the device — bind the MAC and the IP follows.
 
-> ⚠️ MAC randomization: iOS and modern Android default to using a *private* MAC per SSID. Disable "Private Wi-Fi Address" (iOS: Settings → Wi-Fi → ⓘ next to the SSID) for the home network on every device you want to reserve, otherwise the MAC the router sees will change.
+> ⚠️ MAC randomization: iOS and modern Android default to using a _private_ MAC per SSID. Disable "Private Wi-Fi Address" (iOS: Settings → Wi-Fi → ⓘ next to the SSID) for the home network on every device you want to reserve, otherwise the MAC the router sees will change.
 
 ### 4. Verify the Whole Path
 

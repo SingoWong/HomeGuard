@@ -70,11 +70,13 @@ listen = "127.0.0.1:7893"        # 同上
 
 三类参与者各司其职：
 
-| 角色 | 职责 | 配置在哪 |
-| --- | --- | --- |
-| **路由器** | 推送 Gateway/DNS = HomeGuard 主机 IP | 路由器管理界面 |
-| **PF（内核）** | 改写 `dst port` 把流量塞进用户态服务的非标端口 | [scripts/setup-pf.sh](../scripts/setup-pf.sh) |
-| **HomeGuard（用户态）** | DNS / 规则 / 家长控制 / 出站策略 | [config/homeguard.toml](../config/homeguard.toml) |
+
+| 角色                 | 职责                               | 配置在哪                                              |
+| ------------------ | -------------------------------- | ------------------------------------------------- |
+| **路由器**            | 推送 Gateway/DNS = HomeGuard 主机 IP | 路由器管理界面                                           |
+| **PF（内核）**         | 改写 `dst port` 把流量塞进用户态服务的非标端口    | [scripts/setup-pf.sh](../scripts/setup-pf.sh)     |
+| **HomeGuard（用户态）** | DNS / 规则 / 家长控制 / 出站策略           | [config/homeguard.toml](../config/homeguard.toml) |
+
 
 任何一环缺失，链路都断。
 
@@ -207,7 +209,7 @@ Mac Mini en0 网卡
 **TCP 链路里的两个"魔法"**：
 
 - **FakeDNS 是连接 DNS 和 TCP 的桥**。透明代理 accept 的瞬间，TLS 还没开始握手，SNI 还看不到，**唯一能拿到"客户端想去哪个域名"的途径就是用刚才在 DNS 阶段建立的 IP↔域名映射**。这就是为什么 FakeDNS 是开启透明代理必须搭配的组件（[src/dns/fake_dns.rs](../src/dns/fake_dns.rs)）。
-- **`DIOCNATLOOK` 是 macOS 透明代理的固有约束**。`accept()` 在 socket 层只能看到改写后的 `local addr`（永远是 `127.0.0.1:7893`），原始目的必须通过 `ioctl` 反查 PF NAT 表才能拿到。Linux 上对应的是 `SO_ORIGINAL_DST`（iptables REDIRECT）或 `IP_TRANSPARENT`（TPROXY），机制不同但解决的是同一个问题。
+- `**DIOCNATLOOK` 是 macOS 透明代理的固有约束**。`accept()` 在 socket 层只能看到改写后的 `local addr`（永远是 `127.0.0.1:7893`），原始目的必须通过 `ioctl` 反查 PF NAT 表才能拿到。Linux 上对应的是 `SO_ORIGINAL_DST`（iptables REDIRECT）或 `IP_TRANSPARENT`（TPROXY），机制不同但解决的是同一个问题。
 
 ---
 
@@ -260,15 +262,17 @@ listen = "127.0.0.1:5353"
 
 两种模式的对比：
 
-| 维度 | `127.0.0.1:5353` + PF rdr（默认） | `0.0.0.0:53` 直监 |
-| --- | --- | --- |
-| 客户端配置 | DHCP 推 `.5` 作 DNS | 同左 |
-| 路径 | 网卡 → PF 改写 → 用户态 | 网卡 → 用户态 |
-| 需要 root | 是（PF 操作） | 是（绑特权端口） |
-| 端口占用 | 不会和系统 mDNSResponder/named 抢 | 必须先停掉系统占用 |
-| 调试 | 多一层 NAT，看 `pfctl -s nat` | 直观，`lsof -iUDP:53` |
-| 一致性 | 和 TCP 透明代理对称（两者都靠 PF） | DNS 走快路径，TCP 仍需 PF |
-| 安全 | DNS 端口不暴露到 LAN（仅内核可达） | 53 端口对 LAN 直接开放 |
+
+| 维度      | `127.0.0.1:5353` + PF rdr（默认） | `0.0.0.0:53` 直监    |
+| ------- | ----------------------------- | ------------------ |
+| 客户端配置   | DHCP 推 `.5` 作 DNS             | 同左                 |
+| 路径      | 网卡 → PF 改写 → 用户态              | 网卡 → 用户态           |
+| 需要 root | 是（PF 操作）                      | 是（绑特权端口）           |
+| 端口占用    | 不会和系统 mDNSResponder/named 抢   | 必须先停掉系统占用          |
+| 调试      | 多一层 NAT，看 `pfctl -s nat`      | 直观，`lsof -iUDP:53` |
+| 一致性     | 和 TCP 透明代理对称（两者都靠 PF）         | DNS 走快路径，TCP 仍需 PF |
+| 安全      | DNS 端口不暴露到 LAN（仅内核可达）         | 53 端口对 LAN 直接开放    |
+
 
 **默认选 PF 模式的核心理由**：TCP 透明代理那一侧**无论如何都得用 PF**——因为要拿原始目的 IP，必须通过 `DIOCNATLOOK` 反查 PF NAT 表，没有其他途径。DNS 顺势也走 PF，整套架构保持一致，调试和心智负担更低。
 
@@ -300,6 +304,41 @@ FakeDNS 把这个难题在 DNS 阶段就解掉：
 
 代价是池子大小有限（`/15` ≈ 131K 个 IP），到上限后按 LRU 回收最久没用的映射。家庭网络一天的活跃域名远低于这个量级，实践中不会成为瓶颈。
 
+### 7.1 FakeDNS 池为什么是 `198.18.0.0/15`，会不会和 LAN 冲突
+
+常见疑问：「这个虚拟 IP 会不会和 LAN 里某台设备的 IP（比如 `192.168.0.42`）撞上？」
+
+**不会，因为 FakeDNS 池根本不在 LAN 网段里。** 默认池 `198.18.0.0/15` 是 **IANA 在 RFC 2544 里专门为「网络设备基准测试」保留的网段**，覆盖 `198.18.0.0 ~ 198.19.255.255`，约 13 万个 IP。它的三个关键属性：
+
+| 属性          | 说明                                                      |
+| ----------- | ------------------------------------------------------- |
+| 公网不会分配      | IANA 永久保留，任何 ISP/CDN/网站都不会拿到                            |
+| 私网几乎不会用     | RFC 1918 私有段是 `10/8`、`172.16/12`、`192.168/16`，不含 198.18 |
+| 可被默认路由捕获    | 不是回环 / 组播，是普通可路由地址                                      |
+
+正因为 198.18.0.0/15 **不在你家 LAN 网段（如 `192.168.0.0/24`）里**，客户端的路由表判断 dst=198.18.0.42 时，会认为「这不在 LAN，得走默认网关」，从而把包送到 Mac Mini —— PF 才有机会拦截。
+
+**反例：如果把 FakeDNS 池配成 LAN 段（比如 `192.168.0.0/24`）会怎样？**
+
+1. **ARP 风暴 / 冒名顶替**：客户端会以为 `192.168.0.42` 是 LAN 邻居，发 ARP 广播找它的 MAC。如果 LAN 里真有一台设备是 `.42`，那台设备会收到本不属于它的流量；如果没有，ARP 永远失败、TCP 永远建不起来。
+2. **包不走网关**：即使 ARP 没冲突，客户端也会把包二层直送 LAN，**完全绕过 Mac Mini**，PF 看不到包，规则全部失效。
+3. **儿童设备误伤**：你把儿童 iPad 保留在 `192.168.0.50`，FakeDNS 哪天给某个域名分了 `192.168.0.50`，iPad 就会把那个域名的流量发给"自己"。
+
+所以 FakeDNS 池**必须**选在 LAN 网段之外，且最好是公网不会出现的保留段。
+
+**想自定义 `fake_dns_pool` 时的约束**：
+
+| 条件                                | 原因                                             |
+| --------------------------------- | ---------------------------------------------- |
+| 不在你的 LAN 网段内                      | 否则客户端不会路由到网关，PF 截不到                            |
+| 不是真实公网会用的 IP                      | 否则用户访问真该 IP 时会被劫持                              |
+| 不是 RFC 1918 私网段（10 / 172.16 / 192.168） | 否则在企业/校园网漫游时可能撞上别人的 LAN                    |
+| 池子够大（≥ 几千 IP）                     | LRU 淘汰太频繁会让客户端 DNS 缓存的旧 IP 反查失败                |
+
+实际可选范围很窄，业界几乎统一用 `198.18.0.0/15`（Surge、Clash、V2Ray 等都是这个）。少数项目用 `100.64.0.0/10`（CGNAT 段），但近年部分 ISP 开始拿它做运营商级 NAT，反而开始出现误伤，不如 198.18 干净。
+
+**反过来的提醒**：唯一需要注意的是别把家里 LAN 配成 `198.18.x.x` 网段——这种人极少，但如果真这么干了，FakeDNS 默认池就要换掉。RFC 1918 三块私网段（`192.168.0.0/24` / `10.0.0.0/24` / `172.16.0.0/24`）任选其一即可，都和 `198.18.0.0/15` 互不重叠。
+
 ---
 
 ## 8. 故障排查清单
@@ -307,12 +346,14 @@ FakeDNS 把这个难题在 DNS 阶段就解掉：
 按"链路从外到内"的顺序排查：
 
 ### 客户端拿到的 Gateway/DNS 不对
+
 - `netstat -nr | grep default`（macOS）或 `ip route`（Linux）应显示 `192.168.0.5`
 - `scutil --dns | grep nameserver` 应显示 `192.168.0.5`
 - 不对 → 路由器 DHCP 没改 Option 3/6，或客户端没 DHCP 续约（关 Wi-Fi 再开）
 - 路由器不支持改 DHCP 推送 → 把光猫改成桥接 / 端侧手动改 / 换路由器
 
 ### 客户端 ping 得通 .5，但 DNS 不通
+
 - 在 Mac Mini 上：`sudo pfctl -s info` 看 PF 是否 `Enabled`
 - `sudo pfctl -a com.homeguard -s nat` 看 rdr 规则是否加载
 - 都正常 → 在另一台机器上 `dig @192.168.0.5 example.com` 测一下；同时在 Mac Mini 看 `tail -f /var/log/homeguard/homeguard.log`，应该有查询到达
@@ -320,12 +361,14 @@ FakeDNS 把这个难题在 DNS 阶段就解掉：
 - macOS 系统 mDNSResponder 占了 53？检查 `sudo lsof -iUDP:53`；HomeGuard 默认监听 5353 应该不会冲突，但如果你切到了直监模式就要注意
 
 ### DNS 通了，TCP 不通（网页打不开）
+
 - FakeDNS 是否启用？`fake_dns = true`
 - 透明代理日志有没有 accept？`grep TProxy /var/log/homeguard/homeguard.log`
 - 有 accept 但 `DIOCNATLOOK` 失败 → `/dev/pf` 权限或者 PF 没启用（同上）
 - `DIOCNATLOOK` 成功但拿不到域名 → FakeDNS 反查失败，可能客户端没走 HomeGuard 解析（自带了 DoH/DoT 绕过，见下条）
 
 ### 部分应用绕过 HomeGuard（iOS App、Chrome、Firefox 等）
+
 - 这些客户端可能用了 **DoH（DNS over HTTPS）**或 **DoT（DNS over TLS）**，DNS 查询走 TCP/443，**不经过 .5:53**，HomeGuard 看不到，也就分不到 FakeDNS IP
 - 现象：客户端能联网，但完全没经过家长控制
 - 解决：
@@ -334,6 +377,7 @@ FakeDNS 把这个难题在 DNS 阶段就解掉：
   - 写一条 `DOMAIN-SUFFIX,dns.google,REJECT` 之类的兜底规则
 
 ### FakeDNS 池"用完"
+
 - 不会真用完——LRU 会淘汰最久未使用的，新查询永远拿得到 IP
 - 但如果一个老映射被淘汰后客户端还在用旧的虚拟 IP 发 TCP（缓存了 DNS 响应），就会反查失败
 - 解决：调小客户端的 DNS TTL（HomeGuard 默认 `cache_ttl = 300`），或者调大 `fake_dns_pool`
@@ -342,12 +386,15 @@ FakeDNS 把这个难题在 DNS 阶段就解掉：
 
 ## 9. 参考阅读
 
-| 文档 | 关联章节 |
-| --- | --- |
-| [phase2-dns-service.md](phase2-dns-service.md) | DNS 服务内部结构、缓存、上游解析 |
+
+| 文档                                                         | 关联章节                                   |
+| ---------------------------------------------------------- | -------------------------------------- |
+| [phase2-dns-service.md](phase2-dns-service.md)             | DNS 服务内部结构、缓存、上游解析                     |
 | [phase4-transparent-proxy.md](phase4-transparent-proxy.md) | TransparentProxy 实现细节、`DIOCNATLOOK` 调用 |
-| [phase5-shadowsocks.md](phase5-shadowsocks.md) | Outbound 出站、Shadowsocks AEAD 加密 |
-| [phase6-parental-control.md](phase6-parental-control.md) | 设备识别、Schedule 判定、Blocklist 匹配 |
-| [phase8-deployment.md](phase8-deployment.md) | 部署脚本、PF anchor 文件、LaunchDaemon |
-| [README.md#network-setup](../README.md#network-setup) | 路由器/DHCP/儿童设备 IP 的**操作步骤** |
-| [scripts/setup-pf.sh](../scripts/setup-pf.sh) | 实际生成的 PF 规则 |
+| [phase5-shadowsocks.md](phase5-shadowsocks.md)             | Outbound 出站、Shadowsocks AEAD 加密        |
+| [phase6-parental-control.md](phase6-parental-control.md)   | 设备识别、Schedule 判定、Blocklist 匹配          |
+| [phase8-deployment.md](phase8-deployment.md)               | 部署脚本、PF anchor 文件、LaunchDaemon         |
+| [README.md#network-setup](../README.md#network-setup)      | 路由器/DHCP/儿童设备 IP 的**操作步骤**             |
+| [scripts/setup-pf.sh](../scripts/setup-pf.sh)              | 实际生成的 PF 规则                            |
+
+

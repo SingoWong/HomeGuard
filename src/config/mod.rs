@@ -5,5 +5,5 @@
 mod parser;
 mod types;
 
-pub use parser::{load_config, load_config_from_str, ConfigError};
+pub use parser::{load_config, load_config_from_str, load_rule_file, ConfigError};
 pub use types::*;

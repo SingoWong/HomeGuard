@@ -8,7 +8,7 @@ use homeguard::outbound::OutboundManager;
 use homeguard::proxy::TransparentProxy;
 use homeguard::rule::{RuleEngine, RuleParser};
 use homeguard::{config, logging, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info};
@@ -58,17 +58,55 @@ async fn main() -> Result<()> {
         config.proxy.shadowsocks.len()
     );
     info!("Loaded {} proxy groups", config.proxy.group.len());
-    info!("Loaded {} rules", config.rules.rule_list.len());
     info!("Loaded {} schedules", config.schedules.len());
     info!("Loaded {} device configs", config.devices.len());
 
     // Phase 2: Initialize DNS components
     info!("Initializing DNS service...");
 
-    // Phase 3: Initialize Rule Engine from config
-    let rules = match RuleParser::load_rules(&config.rules.rule_list, Some(config_path.parent().unwrap_or(&PathBuf::from(".")))) {
+    // Phase 3: Initialize Rule Engine
+    // Rules live in a separate plain-text file (config.rules.rule_file) because
+    // they change much more often than the rest of the configuration.
+    let config_dir = config_path.parent().unwrap_or(Path::new("."));
+    let rule_file_path = if config.rules.rule_file.is_absolute() {
+        config.rules.rule_file.clone()
+    } else {
+        config_dir.join(&config.rules.rule_file)
+    };
+
+    let rule_strings = match config::load_rule_file(&rule_file_path) {
+        Ok(lines) => {
+            info!(
+                "Loaded {} rule entries from {}",
+                lines.len(),
+                rule_file_path.display()
+            );
+            lines
+        }
+        Err(e) => {
+            error!(
+                "Failed to read rule file {}: {}",
+                rule_file_path.display(),
+                e
+            );
+            return Err(e.into());
+        }
+    };
+
+    // RULE-SET references resolve relative to `rules.rules_dir` (a dedicated
+    // sub-directory for grouped rule sets, kept separate from the main entry
+    // file so users can split rules.list into themed pieces like proxy-ai.list,
+    // direct-cn.list, etc.). If the configured path is relative, it is resolved
+    // against the config file's directory.
+    let rule_base = if config.rules.rules_dir.is_absolute() {
+        config.rules.rules_dir.clone()
+    } else {
+        config_dir.join(&config.rules.rules_dir)
+    };
+
+    let rules = match RuleParser::load_rules(&rule_strings, Some(&rule_base)) {
         Ok(r) => {
-            info!("Loaded {} rules from configuration", r.len());
+            info!("Parsed {} rules (including RULE-SET expansions)", r.len());
             r
         }
         Err(e) => {

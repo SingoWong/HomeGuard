@@ -156,6 +156,8 @@ install_config() {
         sed -e "s|blocklist_dir = \"blocklists\"|blocklist_dir = \"${ETC_DIR}/blocklists\"|g" \
             -e "s|database = \".*\"|database = \"${VAR_DIR}/config.db\"|g" \
             -e "s|log_dir = \".*\"|log_dir = \"${VAR_DIR}/logs\"|g" \
+            -e "s|rule_file = \"./rules.list\"|rule_file = \"${ETC_DIR}/rules.list\"|g" \
+            -e "s|rules_dir = \"./rules\"|rules_dir = \"${ETC_DIR}/rules\"|g" \
             "${source_config}" > "${dest_config}"
     else
         # Create default configuration
@@ -194,9 +196,8 @@ retention_days = 30
 
 [rules]
 geoip_db = ""
-rule_list = [
-    "FINAL,DIRECT"
-]
+rule_file = "${ETC_DIR}/rules.list"
+rules_dir = "${ETC_DIR}/rules"
 
 [proxy]
 # Add Shadowsocks proxies here
@@ -212,10 +213,29 @@ EOF
     chmod 644 "${dest_config}"
     log_info "Configuration installed to ${dest_config}"
 
-    # Copy rules if exist
+    # Install rule list file
+    local source_rules="${PROJECT_DIR}/config/rules.list"
+    local dest_rules="${ETC_DIR}/rules.list"
+    if [[ -f "${dest_rules}" ]]; then
+        log_warn "Rule list already exists: ${dest_rules} (kept as-is, no overwrite)"
+    elif [[ -f "${source_rules}" ]]; then
+        cp "${source_rules}" "${dest_rules}"
+        chmod 644 "${dest_rules}"
+        log_info "Rule list installed to ${dest_rules}"
+    else
+        cat > "${dest_rules}" << 'EOF'
+# HomeGuard Rule List
+# One rule per line. `#` for comments. See docs/phase3-rule-engine.md.
+FINAL,DIRECT
+EOF
+        chmod 644 "${dest_rules}"
+        log_info "Default rule list created at ${dest_rules}"
+    fi
+
+    # Copy rule-set files (referenced by RULE-SET inside rules.list) if any
     if [[ -d "${PROJECT_DIR}/config/rules" ]]; then
         cp -r "${PROJECT_DIR}/config/rules/"* "${ETC_DIR}/rules/" 2>/dev/null || true
-        log_info "Rules copied to ${ETC_DIR}/rules/"
+        log_info "Rule sets copied to ${ETC_DIR}/rules/"
     fi
 
     # Copy blocklists if exist

@@ -138,17 +138,26 @@ pub enum ProxyGroupType {
 }
 
 /// Rules configuration
+///
+/// `rule_file` points at a plain-text rule list (one rule per line, `#` / `//`
+/// comments allowed). Kept separate from the main TOML because rules churn far
+/// more often than infrastructure settings, and a flat file is easier to edit
+/// and diff than a TOML array.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RulesConfig {
     #[serde(default = "default_rules_dir")]
     pub rules_dir: PathBuf,
     pub geoip_db: Option<PathBuf>,
-    #[serde(default)]
-    pub rule_list: Vec<String>,
+    #[serde(default = "default_rule_file")]
+    pub rule_file: PathBuf,
 }
 
 fn default_rules_dir() -> PathBuf {
-    PathBuf::from("./config/rules")
+    PathBuf::from("./rules")
+}
+
+fn default_rule_file() -> PathBuf {
+    PathBuf::from("./rules.list")
 }
 
 /// Time schedule definition
@@ -269,7 +278,7 @@ impl Default for Config {
             rules: RulesConfig {
                 rules_dir: default_rules_dir(),
                 geoip_db: None,
-                rule_list: vec!["FINAL,DIRECT".to_string()],
+                rule_file: default_rule_file(),
             },
             parental: ParentalConfig::default(),
             schedules: HashMap::new(),
