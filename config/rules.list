@@ -1,0 +1,351 @@
+# HomeGuard Rule List
+# =====================================================================
+# Routing strategy:
+#   1. LAN / local addresses     -> DIRECT
+#   2. US-based AI services      -> SS-US
+#   3. Chinese popular services  -> DIRECT
+#   4. Other foreign services    -> SS-HK
+#   5. GEOIP,CN                  -> DIRECT  (catch any CN IP not listed)
+#   6. FINAL                     -> SS-HK   (default for unknown)
+#
+# Rules are evaluated top-to-bottom, FIRST MATCH WINS. So:
+#   - more-specific rules go above more-general ones
+#   - the AI block must precede the Google/Bing keyword rules in §4
+#
+# Syntax: <TYPE>,<PATTERN>,<POLICY>[,no-resolve]
+# Policy names are case-insensitive at parse time but stored upper-case,
+# so they must match the proxy-group names in homeguard.toml (SS-HK / SS-US).
+# =====================================================================
+
+
+# ---------------------------------------------------------------------
+# 1. LAN / loopback / private — never proxy these
+# ---------------------------------------------------------------------
+DOMAIN-SUFFIX,local,DIRECT
+IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+IP-CIDR6,::1/128,DIRECT,no-resolve
+IP-CIDR6,fc00::/7,DIRECT,no-resolve
+IP-CIDR6,fe80::/10,DIRECT,no-resolve
+
+
+# ---------------------------------------------------------------------
+# 2. US-based AI services -> SS-US
+#    (must come BEFORE the Google keyword rule below, otherwise
+#     gemini.google.com would hit DOMAIN-KEYWORD,google first)
+# ---------------------------------------------------------------------
+# OpenAI / ChatGPT
+DOMAIN-SUFFIX,openai.com,SS-US
+DOMAIN-SUFFIX,chatgpt.com,SS-US
+DOMAIN-SUFFIX,oaistatic.com,SS-US
+DOMAIN-SUFFIX,oaiusercontent.com,SS-US
+
+# Anthropic / Claude
+DOMAIN-SUFFIX,anthropic.com,SS-US
+DOMAIN-SUFFIX,claude.ai,SS-US
+
+# Google AI (Gemini, Bard) — specific subdomains routed before google keyword
+DOMAIN-SUFFIX,gemini.google.com,SS-US
+DOMAIN-SUFFIX,bard.google.com,SS-US
+DOMAIN-SUFFIX,aistudio.google.com,SS-US
+DOMAIN-SUFFIX,generativelanguage.googleapis.com,SS-US
+
+# Microsoft Copilot / Bing
+DOMAIN-SUFFIX,bing.com,SS-US
+DOMAIN-SUFFIX,copilot.microsoft.com,SS-US
+
+# Other popular AI / dev-AI tools
+DOMAIN-SUFFIX,perplexity.ai,SS-US
+DOMAIN-SUFFIX,poe.com,SS-US
+DOMAIN-SUFFIX,huggingface.co,SS-US
+DOMAIN-SUFFIX,replicate.com,SS-US
+DOMAIN-SUFFIX,cursor.sh,SS-US
+DOMAIN-SUFFIX,cursor.com,SS-US
+DOMAIN-SUFFIX,codeium.com,SS-US
+DOMAIN-SUFFIX,midjourney.com,SS-US
+DOMAIN-SUFFIX,runwayml.com,SS-US
+DOMAIN-SUFFIX,stability.ai,SS-US
+
+
+# ---------------------------------------------------------------------
+# 3. Chinese popular services -> DIRECT
+#    Mainland-friendly CDNs and apps that would only be slower via proxy.
+# ---------------------------------------------------------------------
+# Apple (CN POPs)
+DOMAIN-SUFFIX,apple.com,DIRECT
+DOMAIN-SUFFIX,apple.co,DIRECT
+DOMAIN-SUFFIX,apple-cloudkit.com,DIRECT
+DOMAIN-SUFFIX,appstore.com,DIRECT
+DOMAIN-SUFFIX,aaplimg.com,DIRECT
+DOMAIN-SUFFIX,cdn-apple.com,DIRECT
+DOMAIN-SUFFIX,icloud.com,DIRECT
+DOMAIN-SUFFIX,icloud-content.com,DIRECT
+DOMAIN-SUFFIX,me.com,DIRECT
+DOMAIN-SUFFIX,mzstatic.com,DIRECT
+
+# Microsoft (CN-friendly endpoints)
+DOMAIN-SUFFIX,microsoft.com,DIRECT
+DOMAIN-SUFFIX,windows.com,DIRECT
+DOMAIN-SUFFIX,windowsupdate.com,DIRECT
+DOMAIN-SUFFIX,office365.com,DIRECT
+DOMAIN-SUFFIX,outlook.com,DIRECT
+DOMAIN-SUFFIX,visualstudio.com,DIRECT
+DOMAIN-SUFFIX,msecnd.net,DIRECT
+
+# Baidu
+DOMAIN-SUFFIX,baidu.com,DIRECT
+DOMAIN-SUFFIX,bdstatic.com,DIRECT
+DOMAIN-SUFFIX,baidubcr.com,DIRECT
+
+# Alibaba / Taobao / Tmall / Ali Cloud
+DOMAIN-SUFFIX,alibaba.com,DIRECT
+DOMAIN-SUFFIX,alicdn.com,DIRECT
+DOMAIN-SUFFIX,alikunlun.com,DIRECT
+DOMAIN-SUFFIX,alipay.com,DIRECT
+DOMAIN-SUFFIX,taobao.com,DIRECT
+DOMAIN-SUFFIX,tmall.com,DIRECT
+DOMAIN-SUFFIX,tmall.hk,DIRECT
+DOMAIN-SUFFIX,amap.com,DIRECT
+DOMAIN-SUFFIX,autonavi.com,DIRECT
+DOMAIN-SUFFIX,dingtalk.com,DIRECT
+
+# Tencent (QQ / WeChat / Weiyun)
+DOMAIN-SUFFIX,qq.com,DIRECT
+DOMAIN-SUFFIX,tencent.com,DIRECT
+DOMAIN-SUFFIX,tencent-cloud.net,DIRECT
+DOMAIN-SUFFIX,gtimg.com,DIRECT
+DOMAIN-SUFFIX,idqqimg.com,DIRECT
+DOMAIN-SUFFIX,myapp.com,DIRECT
+DOMAIN-SUFFIX,myqcloud.com,DIRECT
+
+# JD
+DOMAIN-SUFFIX,jd.com,DIRECT
+DOMAIN-SUFFIX,jd.hk,DIRECT
+DOMAIN-SUFFIX,jdpay.com,DIRECT
+DOMAIN-SUFFIX,360buyimg.com,DIRECT
+
+# Bilibili
+DOMAIN-SUFFIX,bilibili.com,DIRECT
+DOMAIN-SUFFIX,bilibili.tv,DIRECT
+DOMAIN-SUFFIX,biliapi.com,DIRECT
+DOMAIN-SUFFIX,biliapi.net,DIRECT
+DOMAIN-SUFFIX,bilivideo.com,DIRECT
+DOMAIN-SUFFIX,hdslb.com,DIRECT
+DOMAIN-SUFFIX,acgvideo.com,DIRECT
+
+# NetEase
+DOMAIN-SUFFIX,163.com,DIRECT
+DOMAIN-SUFFIX,126.net,DIRECT
+DOMAIN-SUFFIX,127.net,DIRECT
+DOMAIN-SUFFIX,163yun.com,DIRECT
+DOMAIN-SUFFIX,netease.com,DIRECT
+DOMAIN-SUFFIX,lofter.com,DIRECT
+DOMAIN-SUFFIX,ydstatic.com,DIRECT
+
+# Sina / Weibo
+DOMAIN-SUFFIX,sina.com,DIRECT
+DOMAIN-SUFFIX,weibo.com,DIRECT
+DOMAIN-SUFFIX,weibocdn.com,DIRECT
+
+# Sohu / Sogou
+DOMAIN-SUFFIX,sohu.com,DIRECT
+DOMAIN-SUFFIX,sohucs.com,DIRECT
+DOMAIN-SUFFIX,sogou.com,DIRECT
+DOMAIN-SUFFIX,sogoucdn.com,DIRECT
+
+# Xiaomi
+DOMAIN-SUFFIX,xiaomi.com,DIRECT
+DOMAIN-SUFFIX,mi-img.com,DIRECT
+DOMAIN-SUFFIX,miui.com,DIRECT
+DOMAIN-SUFFIX,miwifi.com,DIRECT
+
+# ByteDance (Douyin / Toutiao)
+DOMAIN-SUFFIX,bytedance.com,DIRECT
+DOMAIN-SUFFIX,pstatp.com,DIRECT
+DOMAIN-SUFFIX,snssdk.com,DIRECT
+DOMAIN-SUFFIX,iesdouyin.com,DIRECT
+DOMAIN-SUFFIX,toutiao.com,DIRECT
+
+# Video streaming (CN)
+DOMAIN-SUFFIX,iqiyi.com,DIRECT
+DOMAIN-SUFFIX,iqiyipic.com,DIRECT
+DOMAIN-SUFFIX,youku.com,DIRECT
+DOMAIN-SUFFIX,ykimg.com,DIRECT
+DOMAIN-SUFFIX,mgtv.com,DIRECT
+DOMAIN-SUFFIX,hitv.com,DIRECT
+DOMAIN-SUFFIX,douyu.com,DIRECT
+
+# Travel / map / utilities
+DOMAIN-SUFFIX,ctrip.com,DIRECT
+DOMAIN-SUFFIX,douban.com,DIRECT
+DOMAIN-SUFFIX,doubanio.com,DIRECT
+DOMAIN-SUFFIX,zhihu.com,DIRECT
+
+# Chinese CDNs commonly hosting domestic content
+DOMAIN-SUFFIX,ccgslb.com,DIRECT
+DOMAIN-SUFFIX,ccgslb.net,DIRECT
+DOMAIN-SUFFIX,chinanetcenter.com,DIRECT
+DOMAIN-SUFFIX,wangsu.com,DIRECT
+DOMAIN-SUFFIX,akadns.net,DIRECT
+
+# Catch-all for any .cn TLD
+DOMAIN-SUFFIX,cn,DIRECT
+
+
+# ---------------------------------------------------------------------
+# 4. Other foreign services -> SS-HK
+# ---------------------------------------------------------------------
+# Google (excluding AI subdomains handled above)
+DOMAIN-SUFFIX,google.com,SS-HK
+DOMAIN-SUFFIX,googleapis.com,SS-HK
+DOMAIN-SUFFIX,gstatic.com,SS-HK
+DOMAIN-SUFFIX,ggpht.com,SS-HK
+DOMAIN-SUFFIX,googlevideo.com,SS-HK
+DOMAIN-SUFFIX,googleusercontent.com,SS-HK
+DOMAIN-SUFFIX,ampproject.org,SS-HK
+DOMAIN-SUFFIX,appspot.com,SS-HK
+DOMAIN-SUFFIX,blogger.com,SS-HK
+DOMAIN-SUFFIX,gvt0.com,SS-HK
+DOMAIN-SUFFIX,gvt1.com,SS-HK
+DOMAIN-SUFFIX,gvt3.com,SS-HK
+DOMAIN-KEYWORD,google,SS-HK
+DOMAIN-KEYWORD,blogspot,SS-HK
+
+# YouTube
+DOMAIN-SUFFIX,youtube.com,SS-HK
+DOMAIN-SUFFIX,youtu.be,SS-HK
+DOMAIN,youtubei.googleapis.com,SS-HK
+
+# Meta family (Facebook / Instagram / WhatsApp / Messenger)
+DOMAIN-SUFFIX,facebook.com,SS-HK
+DOMAIN-SUFFIX,fb.com,SS-HK
+DOMAIN-SUFFIX,fb.me,SS-HK
+DOMAIN-SUFFIX,fbcdn.net,SS-HK
+DOMAIN-SUFFIX,fbsbx.com,SS-HK
+DOMAIN-SUFFIX,instagram.com,SS-HK
+DOMAIN-SUFFIX,cdninstagram.com,SS-HK
+DOMAIN-SUFFIX,whatsapp.com,SS-HK
+DOMAIN-SUFFIX,whatsapp.net,SS-HK
+DOMAIN-SUFFIX,messenger.com,SS-HK
+DOMAIN-SUFFIX,m.me,SS-HK
+DOMAIN-KEYWORD,facebook,SS-HK
+
+# Twitter / X
+DOMAIN-SUFFIX,twitter.com,SS-HK
+DOMAIN-SUFFIX,x.com,SS-HK
+DOMAIN-SUFFIX,t.co,SS-HK
+DOMAIN-SUFFIX,twimg.com,SS-HK
+DOMAIN-KEYWORD,twitter,SS-HK
+
+# Telegram
+DOMAIN-SUFFIX,telegram.org,SS-HK
+DOMAIN-SUFFIX,telegram.me,SS-HK
+DOMAIN-SUFFIX,telegra.ph,SS-HK
+DOMAIN-SUFFIX,tdesktop.com,SS-HK
+DOMAIN-SUFFIX,t.me,SS-HK
+IP-CIDR,91.108.4.0/22,SS-HK,no-resolve
+IP-CIDR,91.108.8.0/22,SS-HK,no-resolve
+IP-CIDR,91.108.12.0/22,SS-HK,no-resolve
+IP-CIDR,91.108.16.0/22,SS-HK,no-resolve
+IP-CIDR,91.108.56.0/22,SS-HK,no-resolve
+IP-CIDR,149.154.160.0/20,SS-HK,no-resolve
+
+# Discord / Slack
+DOMAIN-SUFFIX,discord.com,SS-HK
+DOMAIN-SUFFIX,discordapp.com,SS-HK
+DOMAIN-SUFFIX,discordapp.net,SS-HK
+DOMAIN-SUFFIX,slack.com,SS-HK
+
+# Reddit / Quora / Medium
+DOMAIN-SUFFIX,reddit.com,SS-HK
+DOMAIN-SUFFIX,redditmedia.com,SS-HK
+DOMAIN-SUFFIX,quora.com,SS-HK
+DOMAIN-SUFFIX,quoracdn.net,SS-HK
+DOMAIN-SUFFIX,medium.com,SS-HK
+
+# GitHub / Stack Overflow / dev tools
+DOMAIN-KEYWORD,github,SS-HK
+DOMAIN-SUFFIX,githubusercontent.com,SS-HK
+DOMAIN-SUFFIX,stackoverflow.com,SS-HK
+DOMAIN-SUFFIX,stackexchange.com,SS-HK
+DOMAIN-SUFFIX,docker.com,SS-HK
+DOMAIN-SUFFIX,docker.io,SS-HK
+DOMAIN-SUFFIX,npmjs.com,SS-HK
+DOMAIN-SUFFIX,pypi.org,SS-HK
+
+# Cloud / hosting
+DOMAIN-SUFFIX,vercel.com,SS-HK
+DOMAIN-SUFFIX,vercel.app,SS-HK
+DOMAIN-SUFFIX,vercel-dns.com,SS-HK
+DOMAIN-SUFFIX,netlify.com,SS-HK
+DOMAIN-SUFFIX,netlify.app,SS-HK
+DOMAIN-SUFFIX,heroku.com,SS-HK
+DOMAIN-SUFFIX,herokuapp.com,SS-HK
+DOMAIN-SUFFIX,cloudflare.com,SS-HK
+DOMAIN-SUFFIX,workers.dev,SS-HK
+
+# E-commerce / SaaS
+DOMAIN-SUFFIX,shopify.com,SS-HK
+DOMAIN-SUFFIX,myshopify.com,SS-HK
+DOMAIN-SUFFIX,shopify.dev,SS-HK
+DOMAIN-SUFFIX,cdn.shopify.com,SS-HK
+DOMAIN-SUFFIX,stripe.com,SS-HK
+DOMAIN-SUFFIX,tradingview.com,SS-HK
+
+# Pinterest / Wikipedia / Wikimedia
+DOMAIN-KEYWORD,pinterest,SS-HK
+DOMAIN-SUFFIX,wikipedia.org,SS-HK
+DOMAIN-SUFFIX,wikimedia.org,SS-HK
+DOMAIN-SUFFIX,wikiquote.org,SS-HK
+DOMAIN-SUFFIX,wikiwand.com,SS-HK
+
+# News / media
+DOMAIN-SUFFIX,nytimes.com,SS-HK
+DOMAIN-SUFFIX,wsj.com,SS-HK
+DOMAIN-SUFFIX,bbc.com,SS-HK
+DOMAIN-SUFFIX,bloomberg.com,SS-HK
+DOMAIN-SUFFIX,reuters.com,SS-HK
+DOMAIN-SUFFIX,theguardian.com,SS-HK
+DOMAIN-SUFFIX,economist.com,SS-HK
+DOMAIN-SUFFIX,ft.com,SS-HK
+DOMAIN-SUFFIX,ftchinese.com,SS-HK
+DOMAIN-SUFFIX,scmp.com,SS-HK
+
+# Streaming
+DOMAIN-SUFFIX,netflix.com,SS-HK
+DOMAIN-SUFFIX,netflix.net,SS-HK
+DOMAIN-SUFFIX,nflxvideo.net,SS-HK
+DOMAIN-SUFFIX,nflximg.net,SS-HK
+DOMAIN-SUFFIX,nflxso.net,SS-HK
+DOMAIN-SUFFIX,spotify.com,SS-HK
+DOMAIN-SUFFIX,scdn.co,SS-HK
+DOMAIN-KEYWORD,spotify,SS-HK
+DOMAIN-SUFFIX,vimeo.com,SS-HK
+DOMAIN-SUFFIX,twitch.tv,SS-HK
+DOMAIN-SUFFIX,ttvnw.net,SS-HK
+
+# Misc commonly-blocked-in-CN services
+DOMAIN-SUFFIX,dropbox.com,SS-HK
+DOMAIN-SUFFIX,dropboxusercontent.com,SS-HK
+DOMAIN-SUFFIX,onedrive.live.com,SS-HK
+DOMAIN-SUFFIX,duckduckgo.com,SS-HK
+DOMAIN-SUFFIX,line.me,SS-HK
+DOMAIN-SUFFIX,tiktok.com,SS-HK
+DOMAIN-SUFFIX,zoom.us,SS-HK
+DOMAIN-SUFFIX,torproject.org,SS-HK
+
+
+# ---------------------------------------------------------------------
+# 5. GEOIP catch-all for any CN-resolved IP not matched above
+#    (requires `geoip_db` configured in homeguard.toml [rules])
+# ---------------------------------------------------------------------
+GEOIP,CN,DIRECT
+
+
+# ---------------------------------------------------------------------
+# 6. FINAL — default for everything else: assume foreign, send to HK
+# ---------------------------------------------------------------------
+FINAL,SS-HK
