@@ -113,24 +113,26 @@ pub trait DnsFilterTrait: Send + Sync {
 pub struct AllowAllFilter;
 ```
 
-**Dual-Layer Filtering Architecture:**
+**Two-Stage Filtering Architecture:**
 
-The DNS handler supports two layers of filtering, both implementing `DnsFilterTrait`:
+The DNS handler applies filtering in two sequential stages:
 
 ```
-DNS Query
+DNS Query (with source IP)
     │
     ▼
 ┌─────────────────────────────────────────────┐
-│ Layer 1: ParentalController (Phase 6)       │
-│ - Device-specific blocklists (by IP/MAC)    │
+│ Stage 1: ParentalController (Phase 6)       │
+│ - Called directly via check_access()        │
+│ - Device-specific blocklists (by IP)        │
 │ - Time-based schedules (school hours, etc)  │
 │ - Category-based blocking (games, social)   │
 └─────────────────────────────────────────────┘
     │ (if not blocked)
     ▼
 ┌─────────────────────────────────────────────┐
-│ Layer 2: RuleEngine (Phase 3)               │
+│ Stage 2: RuleEngine (Phase 3)               │
+│ - Called via DnsFilterTrait.is_blocked()    │
 │ - REJECT rules (domain/suffix/keyword/IP)   │
 │ - Applied globally to all devices           │
 └─────────────────────────────────────────────┘
@@ -138,6 +140,10 @@ DNS Query
     ▼
 Continue to FakeDNS / Upstream resolution
 ```
+
+**Implementation Note:** ParentalController uses direct method calls (not trait-based)
+because it requires the source IP address for device-specific filtering.
+RuleEngine implements `DnsFilterTrait` for global REJECT rules.
 
 This design enables:
 - **Per-device control**: Different rules for kids vs adults
@@ -306,9 +312,7 @@ upstream = ["8.8.8.8:53", "223.5.5.5:53"]
 fake_dns = true
 fake_dns_pool = "198.18.0.0/15"
 cache_size = 10000
-cache_ttl = 300        # Not used, we respect original TTL
-min_ttl = 60           # Minimum cache TTL
-max_ttl = 3600         # Maximum cache TTL
+cache_ttl = 300        # Default/fallback TTL (for FakeDNS and missing TTL)
 ```
 
 ## Error Handling
@@ -338,5 +342,3 @@ max_ttl = 3600         # Maximum cache TTL
 - `tokio` - Async UDP socket
 - `lru` - LRU cache
 - `dashmap` - Concurrent HashMap
-- `aho-corasick` - Keyword matching
-- `radix_trie` - Suffix matching

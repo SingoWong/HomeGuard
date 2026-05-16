@@ -94,8 +94,8 @@ Phase 8 (Deployment) ◀── All phases complete
   - **Filter interface only** (actual filtering in Phase 3/6)
 
 - [x] DNS Filter (`filter.rs`)
-  - Simple HashSet-based filter (temporary)
-  - DnsFilterTrait interface for Phase 3
+  - DnsFilterTrait interface (implemented by RuleEngine and ParentalController)
+  - AllowAllFilter for disabled mode
 
 **NOT in Phase 2:**
 - ❌ Domain matching algorithms (Trie, Aho-Corasick) → Phase 3

@@ -369,9 +369,9 @@ dig @127.0.0.1 -p 5353 example.com
 
 ## Implementation Checklist
 
-- [ ] `scripts/install.sh` - Main installation
-- [ ] `scripts/uninstall.sh` - Clean uninstallation
-- [ ] `scripts/setup-pf.sh` - PF configuration
-- [ ] `scripts/launchd/com.homeguard.plist` - LaunchDaemon
-- [ ] Update `config/homeguard.toml` with production defaults
-- [ ] Add systemctl-style commands (start/stop/status)
+- [x] `scripts/install.sh` - Main installation
+- [x] `scripts/uninstall.sh` - Clean uninstallation
+- [x] `scripts/setup-pf.sh` - PF configuration
+- [x] `scripts/launchd/com.homeguard.plist` - LaunchDaemon
+- [x] Update `config/homeguard.toml` with production defaults
+- [x] Service management via `launchctl` commands

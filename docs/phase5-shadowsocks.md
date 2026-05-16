@@ -66,23 +66,17 @@ Type:
 
 ```
 src/outbound/
-├── mod.rs              # 模块导出和 Outbound trait
-├── direct.rs           # 直连出站
-├── reject.rs           # 拒绝出站
-├── manager.rs          # 出站管理器
-└── shadowsocks/
-    ├── mod.rs          # SS 模块导出
-    ├── cipher.rs       # AEAD 加密/解密
-    ├── address.rs      # 目标地址编解码
-    ├── tcp.rs          # TCP 连接和数据中继
-    └── client.rs       # SS 客户端封装
-
-src/outbound/
-├── group/
-│   ├── mod.rs          # 代理组模块
-│   ├── select.rs       # 手动选择
-│   ├── url_test.rs     # URL 测试 (自动选择延迟最低)
-│   └── fallback.rs     # 故障转移
+├── mod.rs              # Outbound trait, DirectOutbound, RejectOutbound
+├── manager.rs          # OutboundManager - 出站管理器
+├── shadowsocks/
+│   ├── mod.rs          # ShadowsocksClient, ShadowsocksStream
+│   ├── cipher.rs       # AEAD 加密/解密
+│   └── address.rs      # 目标地址编解码
+└── group/
+    ├── mod.rs          # ProxyGroup 枚举
+    ├── select.rs       # 手动选择组
+    ├── url_test.rs     # URL 测试组 (自动选择延迟最低)
+    └── fallback.rs     # 故障转移组
 ```
 
 ### 核心 Trait
