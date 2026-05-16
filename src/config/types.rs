@@ -88,8 +88,6 @@ impl Default for DnsConfig {
 pub struct TransparentConfig {
     #[serde(default = "default_transparent_listen")]
     pub listen: SocketAddr,
-    #[serde(default)]
-    pub handle_udp: bool,
 }
 
 fn default_transparent_listen() -> SocketAddr {
@@ -263,7 +261,6 @@ impl Default for Config {
             },
             transparent: TransparentConfig {
                 listen: default_transparent_listen(),
-                handle_udp: false,
             },
             proxy: ProxyConfig {
                 shadowsocks: vec![],

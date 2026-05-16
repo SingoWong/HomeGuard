@@ -204,7 +204,6 @@ cache_size = 5000
 
 [transparent]
 listen = "0.0.0.0:7893"
-handle_udp = true
 
 [[proxy.shadowsocks]]
 name = "ss-hk"

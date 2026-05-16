@@ -26,16 +26,24 @@ const DEFAULT_TEST_INTERVAL: Duration = Duration::from_secs(300);
 /// - Built-in outbounds (DIRECT, REJECT)
 /// - Shadowsocks proxies
 /// - Proxy groups
+///
+/// # Data Structure Design
+///
+/// The manager maintains both typed (`groups`) and generic (`all_outbounds`) lookups:
+/// - `groups`: Typed HashMap for group-specific operations (select_proxy, start_health_checks)
+/// - `all_outbounds`: Generic HashMap for policy-based lookups via `get_by_name()`
+///
+/// This dual structure trades some memory for type safety and API clarity.
 pub struct OutboundManager {
     /// Direct outbound (always available)
     direct: Arc<DirectOutbound>,
     /// Reject outbound (always available)
     reject: Arc<RejectOutbound>,
-    /// Shadowsocks proxies by name
+    /// Shadowsocks proxies by name (typed access for future extensions)
     shadowsocks: HashMap<String, Arc<ShadowsocksClient>>,
-    /// Proxy groups by name
+    /// Proxy groups by name (typed access for select_proxy, start_health_checks)
     groups: HashMap<String, Arc<ProxyGroup>>,
-    /// All outbounds (for lookup)
+    /// All outbounds as trait objects (generic lookup by name)
     all_outbounds: HashMap<String, Arc<dyn Outbound>>,
 }
 

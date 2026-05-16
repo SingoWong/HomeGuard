@@ -278,7 +278,13 @@ where
     tokio::io::copy_bidirectional(inbound, &mut *outbound).await
 }
 
-/// Handler statistics (for Phase 7 integration)
+/// Handler statistics (placeholder for Phase 7 integration)
+///
+/// TODO: These stats are not currently collected. To implement:
+/// 1. Add AtomicU64 counters to ConnectionHandler
+/// 2. Update counters in handle_connection()
+/// 3. Expose stats via a stats() method
+/// 4. Integrate with storage/logging module
 #[derive(Debug, Default, Clone)]
 pub struct HandlerStats {
     /// Total connections handled

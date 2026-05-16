@@ -44,7 +44,7 @@ A Rust-based home network gateway for parental control and proxy management, des
 
 ```bash
 # Clone repository
-git clone https://github.com/your-username/homeguard.git
+git clone https://github.com/singowong/homeguard.git
 cd homeguard
 
 # Build release
@@ -59,6 +59,7 @@ sudo ./scripts/install.sh
 ```
 
 This will:
+
 1. Install binary to `/usr/local/bin/homeguard`
 2. Install config to `/usr/local/etc/homeguard/`
 3. Configure PF firewall rules
@@ -130,39 +131,41 @@ homeguard/
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [00-overview.md](docs/00-overview.md) | Project overview and phase breakdown |
-| [phase3-rule-engine.md](docs/phase3-rule-engine.md) | Rule engine design |
-| [phase4-transparent-proxy.md](docs/phase4-transparent-proxy.md) | Transparent proxy design |
-| [phase5-shadowsocks.md](docs/phase5-shadowsocks.md) | Shadowsocks implementation |
-| [phase6-parental-control.md](docs/phase6-parental-control.md) | Parental control design |
-| [phase7-storage.md](docs/phase7-storage.md) | Storage design (SQLite + file logging) |
-| [phase8-deployment.md](docs/phase8-deployment.md) | Deployment scripts design |
+| Document                                                        | Description                            |
+| --------------------------------------------------------------- | -------------------------------------- |
+| [00-overview.md](docs/00-overview.md)                           | Project overview and phase breakdown   |
+| [phase1-project-structure.md](docs/phase1-project-structure.md) | Project framework and configuration    |
+| [phase2-dns-service.md](docs/phase2-dns-service.md)             | DNS server, cache, FakeDNS             |
+| [phase3-rule-engine.md](docs/phase3-rule-engine.md)             | Rule engine design                     |
+| [phase4-transparent-proxy.md](docs/phase4-transparent-proxy.md) | Transparent proxy design               |
+| [phase5-shadowsocks.md](docs/phase5-shadowsocks.md)             | Shadowsocks implementation             |
+| [phase6-parental-control.md](docs/phase6-parental-control.md)   | Parental control design                |
+| [phase7-storage.md](docs/phase7-storage.md)                     | Storage design (SQLite + file logging) |
+| [phase8-deployment.md](docs/phase8-deployment.md)               | Deployment scripts design              |
 
 ## Configuration Reference
 
 ### DNS Settings
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `listen` | `127.0.0.1:5353` | DNS server listen address |
-| `upstream` | `["8.8.8.8:53"]` | Upstream DNS servers |
-| `fake_dns` | `true` | Enable FakeDNS for proxy |
-| `fake_dns_pool` | `198.18.0.0/15` | FakeDNS IP pool |
-| `cache_size` | `10000` | DNS cache entries |
-| `cache_ttl` | `300` | Default TTL in seconds |
+| Option          | Default          | Description               |
+| --------------- | ---------------- | ------------------------- |
+| `listen`        | `127.0.0.1:5353` | DNS server listen address |
+| `upstream`      | `["8.8.8.8:53"]` | Upstream DNS servers      |
+| `fake_dns`      | `true`           | Enable FakeDNS for proxy  |
+| `fake_dns_pool` | `198.18.0.0/15`  | FakeDNS IP pool           |
+| `cache_size`    | `10000`          | DNS cache entries         |
+| `cache_ttl`     | `300`            | Default TTL in seconds    |
 
 ### Rule Types
 
-| Type | Example | Description |
-|------|---------|-------------|
-| `DOMAIN` | `DOMAIN,example.com,DIRECT` | Exact domain match |
-| `DOMAIN-SUFFIX` | `DOMAIN-SUFFIX,google.com,Proxy` | Domain suffix match |
-| `DOMAIN-KEYWORD` | `DOMAIN-KEYWORD,youtube,Proxy` | Domain keyword match |
-| `IP-CIDR` | `IP-CIDR,192.168.0.0/16,DIRECT` | IP range match |
-| `GEOIP` | `GEOIP,CN,DIRECT` | GeoIP country match |
-| `FINAL` | `FINAL,DIRECT` | Default policy |
+| Type             | Example                          | Description          |
+| ---------------- | -------------------------------- | -------------------- |
+| `DOMAIN`         | `DOMAIN,example.com,DIRECT`      | Exact domain match   |
+| `DOMAIN-SUFFIX`  | `DOMAIN-SUFFIX,google.com,Proxy` | Domain suffix match  |
+| `DOMAIN-KEYWORD` | `DOMAIN-KEYWORD,youtube,Proxy`   | Domain keyword match |
+| `IP-CIDR`        | `IP-CIDR,192.168.0.0/16,DIRECT`  | IP range match       |
+| `GEOIP`          | `GEOIP,CN,DIRECT`                | GeoIP country match  |
+| `FINAL`          | `FINAL,DIRECT`                   | Default policy       |
 
 ### Parental Control
 
@@ -205,6 +208,7 @@ interval = 300
 ```
 
 Supported encryption methods:
+
 - `aes-128-gcm`
 - `aes-256-gcm`
 - `chacha20-ietf-poly1305`
@@ -218,6 +222,7 @@ HomeGuard requires router/DHCP configuration to work:
 3. **DNS Setting** - Point DNS to Mac Mini
 
 Example network topology:
+
 ```
 Internet ──▶ Router ──▶ Mac Mini (HomeGuard) ──▶ Home Devices
                         192.168.0.5

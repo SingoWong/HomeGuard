@@ -101,39 +101,48 @@ impl DnsHandler {
 
 ### 3. DNS Filter (`filter.rs`)
 
-Domain filtering for parental control.
+DNS filtering is implemented through a trait interface, with actual filtering logic in later phases:
 
 ```rust
-pub struct DnsFilter {
-    // Exact match: O(1) lookup
-    exact_blocklist: HashSet<String>,
-
-    // Suffix match: Trie tree, O(m) where m = domain length
-    suffix_trie: DomainSuffixTrie,
-
-    // Keyword match: Aho-Corasick, O(n) where n = domain length
-    keyword_matcher: AhoCorasick,
+/// Trait interface - allows pluggable filter implementations
+pub trait DnsFilterTrait: Send + Sync {
+    fn is_blocked(&self, domain: &str) -> bool;
 }
 
-impl DnsFilter {
-    pub fn new() -> Self;
-    pub fn load_blocklist(&mut self, path: &Path) -> Result<()>;
-    pub fn is_blocked(&self, domain: &str) -> bool;
-}
+/// No-op filter used when parental control is disabled
+pub struct AllowAllFilter;
 ```
 
-**Blocklist Format:**
-```
-# Comments start with #
-# Exact domain
-example.com
+**Dual-Layer Filtering Architecture:**
 
-# Suffix match (matches *.porn.com and porn.com)
-.porn.com
+The DNS handler supports two layers of filtering, both implementing `DnsFilterTrait`:
 
-# Keyword match (matches any domain containing "gambling")
-*gambling*
 ```
+DNS Query
+    │
+    ▼
+┌─────────────────────────────────────────────┐
+│ Layer 1: ParentalController (Phase 6)       │
+│ - Device-specific blocklists (by IP/MAC)    │
+│ - Time-based schedules (school hours, etc)  │
+│ - Category-based blocking (games, social)   │
+└─────────────────────────────────────────────┘
+    │ (if not blocked)
+    ▼
+┌─────────────────────────────────────────────┐
+│ Layer 2: RuleEngine (Phase 3)               │
+│ - REJECT rules (domain/suffix/keyword/IP)   │
+│ - Applied globally to all devices           │
+└─────────────────────────────────────────────┘
+    │ (if not blocked)
+    ▼
+Continue to FakeDNS / Upstream resolution
+```
+
+This design enables:
+- **Per-device control**: Different rules for kids vs adults
+- **Scheduled blocking**: Block games during school hours
+- **Global malware blocking**: REJECT rules apply to everyone
 
 ### 4. DNS Cache (`cache.rs`)
 

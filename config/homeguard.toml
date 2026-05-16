@@ -30,8 +30,6 @@ cache_ttl = 300
 # Transparent proxy listen address
 # Use 127.0.0.1:7893 for production (PF redirects to this port)
 listen = "127.0.0.1:7893"
-# Handle UDP traffic
-handle_udp = false
 
 [proxy]
 # Shadowsocks proxies

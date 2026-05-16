@@ -15,7 +15,7 @@ mod handler;
 mod server;
 
 pub use cache::DnsCache;
-pub use filter::{AllowAllFilter, DnsFilterTrait, SimpleDnsFilter};
+pub use filter::{AllowAllFilter, DnsFilterTrait};
 pub use fake_dns::FakeDns;
 pub use resolver::DnsResolver;
 pub use handler::DnsHandler;

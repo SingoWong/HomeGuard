@@ -67,7 +67,7 @@ homeguard/
 Config
 ├── GeneralConfig      # log_level, data_dir
 ├── DnsConfig          # listen, upstream, fake_dns, cache
-├── TransparentConfig  # listen, handle_udp
+├── TransparentConfig  # listen
 ├── ProxyConfig        # shadowsocks[], group[]
 ├── RulesConfig        # rules_dir, geoip_db, rule_list
 ├── schedules          # HashMap<String, Schedule>
