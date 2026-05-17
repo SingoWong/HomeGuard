@@ -1,8 +1,25 @@
 # Phase 6: Parental Control (儿童管控)
 
-## Overview
+> **Status: superseded by v2 (grant-based model).** The runtime no longer
+> uses time schedules. See [parental-control.md](parental-control.md) for the
+> current model — every-day usage, SQL cookbook, and data layout.
+>
+> What changed:
+> - `[schedules.*]` config and `ScheduleManager` runtime are **removed**.
+> - `device.extra_blocklists` is **split** into `hard_blocklists` (always block,
+>   no grant can override) and `grantable_blocklists` (blocked by default,
+>   openable via an active row in the SQLite `grants` table).
+> - The parent issues time-bounded permissions via `sqlite3 INSERT INTO grants ...`,
+>   which take effect within 5 seconds (cache refresh window).
+>
+> This document is kept as the **original design reference** for the
+> schedule-based prototype; treat the "Time Schedule Enforcement" section
+> below as historical only.
 
-Phase 6 implements device-aware access control with time-based restrictions. This enables:
+## Overview (historical)
+
+Phase 6 originally implemented device-aware access control with time-based
+restrictions:
 - Device identification (by IP address)
 - Per-device blocklist application
 - Time schedule enforcement (e.g., no gaming during school hours)

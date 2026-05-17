@@ -15,8 +15,9 @@ pub struct Config {
     pub rules: RulesConfig,
     #[serde(default)]
     pub parental: ParentalConfig,
-    #[serde(default)]
-    pub schedules: HashMap<String, Schedule>,
+    /// Devices declared in TOML. As of v2, this is **only a first-boot seed**
+    /// for SQLite — once devices exist in the DB, this section is ignored.
+    /// New devices should be added via SQL.
     #[serde(default)]
     pub devices: HashMap<String, DeviceConfig>,
 }
@@ -160,40 +161,13 @@ fn default_rule_file() -> PathBuf {
     PathBuf::from("./rules.list")
 }
 
-/// Time schedule definition
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Schedule {
-    pub days: Vec<Weekday>,
-    pub start: String,
-    pub end: String,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
-pub enum Weekday {
-    Mon,
-    Tue,
-    Wed,
-    Thu,
-    Fri,
-    Sat,
-    Sun,
-}
-
-impl Weekday {
-    pub fn from_chrono(weekday: chrono::Weekday) -> Self {
-        match weekday {
-            chrono::Weekday::Mon => Weekday::Mon,
-            chrono::Weekday::Tue => Weekday::Tue,
-            chrono::Weekday::Wed => Weekday::Wed,
-            chrono::Weekday::Thu => Weekday::Thu,
-            chrono::Weekday::Fri => Weekday::Fri,
-            chrono::Weekday::Sat => Weekday::Sat,
-            chrono::Weekday::Sun => Weekday::Sun,
-        }
-    }
-}
-
-/// Device configuration for parental control
+/// Device configuration for parental control.
+///
+/// As of v2 (grant-based parental control), this struct is only used as a
+/// **first-boot seed** for the SQLite `devices` table. The runtime
+/// [`crate::control::DeviceManager`] loads its working set from the DB after
+/// boot, so changes to this section in `homeguard.toml` after the first run
+/// have **no effect**.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceConfig {
     pub ip: Option<String>,
@@ -201,8 +175,18 @@ pub struct DeviceConfig {
     pub name: String,
     #[serde(default)]
     pub device_type: DeviceType,
+    /// Categories that are **always blocked** for this device. No grant can
+    /// override a hard block. Typical contents: `["porn", "violence"]`.
     #[serde(default)]
-    pub schedules: Vec<String>,
+    pub hard_blocklists: Vec<String>,
+    /// Categories that are blocked by default but can be **temporarily
+    /// unblocked by an active grant** (`INSERT INTO grants ...`). Typical
+    /// contents: `["games", "social"]`.
+    #[serde(default)]
+    pub grantable_blocklists: Vec<String>,
+    /// Deprecated alias for `grantable_blocklists`, kept so old configs still
+    /// parse. If present, its contents are appended to `grantable_blocklists`
+    /// during seeding and a warning is logged.
     #[serde(default)]
     pub extra_blocklists: Vec<String>,
 }
@@ -281,7 +265,6 @@ impl Default for Config {
                 rule_file: default_rule_file(),
             },
             parental: ParentalConfig::default(),
-            schedules: HashMap::new(),
             devices: HashMap::new(),
         }
     }

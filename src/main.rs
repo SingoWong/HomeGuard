@@ -2,16 +2,28 @@
 //!
 //! Main entry point for the HomeGuard application.
 
-use homeguard::control::ParentalController;
+use homeguard::config::{DeviceConfig, DeviceType};
+use homeguard::control::{
+    BlocklistManager, DeviceManager, GrantStore, ParentalController, ParentalPolicy,
+};
 use homeguard::dns::{DnsCache, DnsHandler, DnsResolver, DnsServer, FakeDns};
 use homeguard::outbound::OutboundManager;
 use homeguard::proxy::TransparentProxy;
 use homeguard::rule::{RuleEngine, RuleParser};
+use homeguard::storage::{BlocklistMode, ConfigStore, Database, NewDevice};
 use homeguard::{config, logging, Result};
+use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+/// How often the GrantStore refreshes its in-memory cache from SQLite.
+/// `INSERT INTO grants ...` from the parent's shell takes effect within this
+/// interval. See docs/parental-control.md for the staleness rationale.
+const GRANT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Default config file path
 const DEFAULT_CONFIG_PATH: &str = "./config/homeguard.toml";
@@ -58,8 +70,7 @@ async fn main() -> Result<()> {
         config.proxy.shadowsocks.len()
     );
     info!("Loaded {} proxy groups", config.proxy.group.len());
-    info!("Loaded {} schedules", config.schedules.len());
-    info!("Loaded {} device configs", config.devices.len());
+    info!("Loaded {} device configs (TOML seeds)", config.devices.len());
 
     // Phase 2: Initialize DNS components
     info!("Initializing DNS service...");
@@ -159,6 +170,30 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Phase 7: Open SQLite storage (always, regardless of parental.enabled,
+    // since grants live here and may be added later).
+    let db_path = if config.general.data_dir.is_absolute() {
+        config.general.data_dir.join("config.db")
+    } else {
+        config_dir.join(&config.general.data_dir).join("config.db")
+    };
+    let store = match Database::open(&db_path) {
+        Ok(db) => Arc::new(Mutex::new(ConfigStore::new(db))),
+        Err(e) => {
+            error!("Failed to open SQLite DB at {}: {}", db_path.display(), e);
+            return Err(homeguard::error::HomeGuardError::Storage(e.to_string()));
+        }
+    };
+    info!("Storage opened: {}", db_path.display());
+
+    // First-boot seed: if DB has zero devices and TOML has [devices.*],
+    // import them so the runtime has something to identify. After this seed
+    // runs, the TOML section is informational only.
+    if let Err(e) = maybe_seed_devices_from_toml(&store, &config.devices) {
+        error!("Device seeding failed: {}", e);
+        return Err(e);
+    }
+
     // Phase 6: Initialize Parental Control (optional)
     let parental_controller = if config.parental.enabled {
         info!("Initializing parental control...");
@@ -167,31 +202,82 @@ async fn main() -> Result<()> {
         let blocklist_dir = if config.parental.blocklist_dir.is_absolute() {
             config.parental.blocklist_dir.clone()
         } else {
-            config_path
-                .parent()
-                .unwrap_or(&PathBuf::from("."))
-                .join(&config.parental.blocklist_dir)
+            config_dir.join(&config.parental.blocklist_dir)
         };
 
-        match ParentalController::from_config(&config, Some(&blocklist_dir)) {
-            Ok(mut controller) => {
-                // Set global categories
-                if !config.parental.global_categories.is_empty() {
-                    controller.set_global_categories(config.parental.global_categories.clone());
-                }
+        // Build device map from SQLite (authoritative source).
+        let device_records = store.lock().list_devices()
+            .map_err(|e| { error!("list_devices failed: {}", e); e })?;
+        let blocklist_groups = store.lock().list_device_blocklists_grouped()
+            .map_err(|e| { error!("list_device_blocklists_grouped failed: {}", e); e })?;
 
-                info!(
-                    "Parental control enabled: {} devices, {} schedules",
-                    config.devices.len(),
-                    config.schedules.len()
-                );
-                Some(Arc::new(controller))
-            }
+        let device_configs: HashMap<String, DeviceConfig> = device_records
+            .into_iter()
+            .map(|rec| {
+                let (hard, grantable) = blocklist_groups
+                    .get(&rec.id)
+                    .cloned()
+                    .unwrap_or_default();
+                let device_type = match rec.device_type.as_str() {
+                    "child" => DeviceType::Child,
+                    "adult" => DeviceType::Adult,
+                    "iot" => DeviceType::IoT,
+                    _ => DeviceType::Unknown,
+                };
+                let cfg = DeviceConfig {
+                    ip: rec.ip,
+                    mac: rec.mac,
+                    name: rec.name,
+                    device_type,
+                    hard_blocklists: hard,
+                    grantable_blocklists: grantable,
+                    extra_blocklists: vec![],
+                };
+                (rec.id, cfg)
+            })
+            .collect();
+
+        let device_manager = DeviceManager::from_config(&device_configs);
+
+        let mut blocklist_manager = BlocklistManager::new();
+        if let Err(e) = blocklist_manager.load_directory(&blocklist_dir) {
+            error!("Failed to load blocklists from {}: {}", blocklist_dir.display(), e);
+            return Err(e);
+        }
+
+        // GrantStore — refreshes from SQLite every GRANT_REFRESH_INTERVAL.
+        let grant_store = match GrantStore::open(store.clone()) {
+            Ok(gs) => gs,
             Err(e) => {
-                error!("Failed to initialize parental control: {}", e);
+                error!("Failed to open GrantStore: {}", e);
                 return Err(e);
             }
-        }
+        };
+        // Background task: keep cache fresh. Handle is kept implicitly alive
+        // by the tokio runtime until main returns.
+        let _grant_refresh = grant_store.clone().spawn_refresh_task(GRANT_REFRESH_INTERVAL);
+
+        let default_policy = match config.parental.default_policy.as_str() {
+            "block_all" => ParentalPolicy::BlockAll,
+            "block_if_listed" => ParentalPolicy::BlockIfListed,
+            _ => ParentalPolicy::Allow,
+        };
+
+        let mut controller = ParentalController::new(
+            device_manager,
+            blocklist_manager,
+            Some(grant_store),
+            config.parental.global_categories.clone(),
+            default_policy,
+        );
+        controller.set_global_categories(config.parental.global_categories.clone());
+
+        info!(
+            "Parental control enabled: {} devices loaded from DB, grant refresh every {:?}",
+            device_configs.len(),
+            GRANT_REFRESH_INTERVAL
+        );
+        Some(Arc::new(controller))
     } else {
         info!("Parental control disabled");
         None
@@ -302,8 +388,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // TODO: Phase 7 - Initialize SQLite storage
-
     info!("HomeGuard is running. Press Ctrl+C to stop.");
 
     // Wait for shutdown signal
@@ -322,5 +406,72 @@ async fn main() -> Result<()> {
     dns_handle.abort();
     proxy_handle.abort();
 
+    Ok(())
+}
+
+/// If the SQLite `devices` table is empty and the TOML config has a
+/// `[devices.*]` section, import each one as a seed. After this runs, the
+/// runtime treats the SQLite table as authoritative — further edits to
+/// `[devices.*]` have no effect (we log a warning telling the user this).
+///
+/// Also handles the deprecated `extra_blocklists` field: its contents are
+/// merged into `grantable_blocklists` with a warning.
+fn maybe_seed_devices_from_toml(
+    store: &Arc<Mutex<ConfigStore>>,
+    toml_devices: &HashMap<String, DeviceConfig>,
+) -> Result<()> {
+    if toml_devices.is_empty() {
+        return Ok(());
+    }
+    let existing = store.lock().list_devices()?;
+    if !existing.is_empty() {
+        // DB already populated; warn if TOML still has device blocks so user
+        // doesn't expect TOML edits to take effect.
+        warn!(
+            "[devices.*] in homeguard.toml is ignored: SQLite already has {} device(s). \
+             Edit devices via SQL instead.",
+            existing.len()
+        );
+        return Ok(());
+    }
+
+    info!("Seeding {} device(s) from homeguard.toml into SQLite", toml_devices.len());
+    for (id, cfg) in toml_devices {
+        let device_type = match cfg.device_type {
+            DeviceType::Child => "child",
+            DeviceType::Adult => "adult",
+            DeviceType::IoT => "iot",
+            DeviceType::Unknown => "unknown",
+        };
+        store.lock().insert_device(&NewDevice {
+            id: id.clone(),
+            name: cfg.name.clone(),
+            ip: cfg.ip.clone(),
+            mac: cfg.mac.clone(),
+            device_type: device_type.to_string(),
+        })?;
+
+        for category in &cfg.hard_blocklists {
+            store.lock().add_device_blocklist(id, category, BlocklistMode::Hard)?;
+        }
+        for category in &cfg.grantable_blocklists {
+            store.lock().add_device_blocklist(id, category, BlocklistMode::Grantable)?;
+        }
+        // Backward-compat: extra_blocklists collapses into grantable
+        if !cfg.extra_blocklists.is_empty() {
+            warn!(
+                "Device '{}': `extra_blocklists` is deprecated; treating as `grantable_blocklists`",
+                id
+            );
+            for category in &cfg.extra_blocklists {
+                store.lock().add_device_blocklist(id, category, BlocklistMode::Grantable)?;
+            }
+        }
+    }
+    warn!(
+        "Seeded {} device(s) from TOML. The [devices.*] section is now persisted in SQLite; \
+         further device changes should be made via SQL (see docs/parental-control.md).",
+        toml_devices.len()
+    );
     Ok(())
 }

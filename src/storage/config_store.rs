@@ -2,6 +2,8 @@
 //!
 //! CRUD operations for configuration data stored in SQLite.
 
+use std::collections::HashMap;
+
 use rusqlite::params;
 use serde_json;
 use tracing::debug;
@@ -595,6 +597,143 @@ impl ConfigStore {
 
         Ok(entries)
     }
+
+    // ==================== Device-Blocklist Bindings (v2) ====================
+
+    /// Bind a category to a device with the given enforcement mode.
+    /// Idempotent: re-inserting the same (device, category) replaces the mode.
+    pub fn add_device_blocklist(&self, device_id: &str, category: &str, mode: BlocklistMode) -> Result<()> {
+        self.db.conn().execute(
+            "INSERT INTO device_blocklists (device_id, category, mode)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(device_id, category) DO UPDATE SET mode = excluded.mode",
+            params![device_id, category, mode.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Return a map of device_id → (hard_categories, grantable_categories).
+    /// Used at startup to construct in-memory device records for the
+    /// ParentalController without N+1 queries.
+    pub fn list_device_blocklists_grouped(&self) -> Result<HashMap<String, (Vec<String>, Vec<String>)>> {
+        let mut stmt = self.db.conn().prepare(
+            "SELECT device_id, category, mode FROM device_blocklists ORDER BY device_id, category",
+        )?;
+
+        let mut grouped: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            let device_id: String = row.get(0)?;
+            let category: String = row.get(1)?;
+            let mode: String = row.get(2)?;
+            Ok((device_id, category, mode))
+        })?;
+
+        for row in rows.flatten() {
+            let (device_id, category, mode_str) = row;
+            let entry = grouped.entry(device_id).or_insert_with(|| (Vec::new(), Vec::new()));
+            match BlocklistMode::parse(&mode_str) {
+                Some(BlocklistMode::Hard) => entry.0.push(category),
+                Some(BlocklistMode::Grantable) => entry.1.push(category),
+                None => {
+                    // Defensive: schema CHECK should prevent this. Skip silently.
+                }
+            }
+        }
+
+        Ok(grouped)
+    }
+
+    // ==================== Grant Operations (v2) ====================
+
+    /// Insert a new grant. Returns the new row's id.
+    /// If `granted_at` is None in `NewGrant`, SQLite's `datetime('now')` default is used.
+    pub fn insert_grant(&self, grant: &NewGrant) -> Result<i64> {
+        let conn = self.db.conn();
+        match &grant.granted_at {
+            Some(ts) => conn.execute(
+                "INSERT INTO grants (device_id, category, granted_at, expires_at, note)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![grant.device_id, grant.category, ts, grant.expires_at, grant.note],
+            )?,
+            None => conn.execute(
+                "INSERT INTO grants (device_id, category, expires_at, note)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![grant.device_id, grant.category, grant.expires_at, grant.note],
+            )?,
+        };
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// List all grants that are currently active:
+    /// `revoked_at IS NULL AND expires_at > now()`.
+    /// Used by `GrantStore::refresh` to rebuild the in-memory hot cache.
+    pub fn list_active_grants(&self) -> Result<Vec<GrantRecord>> {
+        let mut stmt = self.db.conn().prepare(
+            "SELECT id, device_id, category, granted_at, expires_at, revoked_at, note
+             FROM grants
+             WHERE revoked_at IS NULL AND expires_at > datetime('now')
+             ORDER BY device_id, category, expires_at DESC",
+        )?;
+
+        let grants = stmt
+            .query_map([], |row| {
+                Ok(GrantRecord {
+                    id: row.get(0)?,
+                    device_id: row.get(1)?,
+                    category: row.get(2)?,
+                    granted_at: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    revoked_at: row.get(5)?,
+                    note: row.get(6)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(grants)
+    }
+
+    /// List grants for audit/UI. If `include_expired` is false, only active
+    /// (non-revoked, non-expired) grants are returned.
+    pub fn list_grants(&self, include_expired: bool) -> Result<Vec<GrantRecord>> {
+        let query = if include_expired {
+            "SELECT id, device_id, category, granted_at, expires_at, revoked_at, note
+             FROM grants ORDER BY granted_at DESC"
+        } else {
+            "SELECT id, device_id, category, granted_at, expires_at, revoked_at, note
+             FROM grants
+             WHERE revoked_at IS NULL AND expires_at > datetime('now')
+             ORDER BY granted_at DESC"
+        };
+
+        let mut stmt = self.db.conn().prepare(query)?;
+        let grants = stmt
+            .query_map([], |row| {
+                Ok(GrantRecord {
+                    id: row.get(0)?,
+                    device_id: row.get(1)?,
+                    category: row.get(2)?,
+                    granted_at: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    revoked_at: row.get(5)?,
+                    note: row.get(6)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(grants)
+    }
+
+    /// Manually revoke a grant. Idempotent: revoking an already-revoked or
+    /// expired grant returns Ok(false) without touching the row.
+    pub fn revoke_grant(&self, id: i64) -> Result<bool> {
+        let rows = self.db.conn().execute(
+            "UPDATE grants SET revoked_at = datetime('now')
+             WHERE id = ?1 AND revoked_at IS NULL",
+            params![id],
+        )?;
+        Ok(rows > 0)
+    }
 }
 
 #[cfg(test)]
@@ -839,5 +978,108 @@ mod tests {
         // List
         let entries = store.list_config().expect("Failed to list");
         assert_eq!(entries.len(), 4);
+    }
+
+    fn seed_child_device(store: &ConfigStore) {
+        store.insert_device(&NewDevice {
+            id: "child_ipad".to_string(),
+            name: "Child iPad".to_string(),
+            ip: Some("192.168.0.50".to_string()),
+            mac: None,
+            device_type: "child".to_string(),
+        }).expect("seed device");
+    }
+
+    #[test]
+    fn test_device_blocklists_hard_and_grantable() {
+        let store = create_test_store();
+        seed_child_device(&store);
+
+        store.add_device_blocklist("child_ipad", "porn", BlocklistMode::Hard).unwrap();
+        store.add_device_blocklist("child_ipad", "games", BlocklistMode::Grantable).unwrap();
+        store.add_device_blocklist("child_ipad", "social", BlocklistMode::Grantable).unwrap();
+
+        let grouped = store.list_device_blocklists_grouped().unwrap();
+        let (hard, grantable) = grouped.get("child_ipad").expect("entry exists");
+        assert_eq!(hard, &vec!["porn".to_string()]);
+        assert_eq!(grantable, &vec!["games".to_string(), "social".to_string()]);
+
+        // Idempotent upsert: re-insert games as Hard should flip mode.
+        store.add_device_blocklist("child_ipad", "games", BlocklistMode::Hard).unwrap();
+        let grouped = store.list_device_blocklists_grouped().unwrap();
+        let (hard, grantable) = grouped.get("child_ipad").unwrap();
+        assert!(hard.contains(&"games".to_string()));
+        assert!(!grantable.contains(&"games".to_string()));
+    }
+
+    #[test]
+    fn test_grant_lifecycle() {
+        let store = create_test_store();
+        seed_child_device(&store);
+
+        // Insert: expires in 1 hour
+        let id = store.insert_grant(&NewGrant {
+            device_id: "child_ipad".to_string(),
+            category: "games".to_string(),
+            granted_at: None, // use SQL default
+            expires_at: "9999-12-31 23:59:59".to_string(),
+            note: Some("homework done".to_string()),
+        }).unwrap();
+        assert!(id > 0);
+
+        // List active: should find one
+        let active = store.list_active_grants().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].device_id, "child_ipad");
+        assert_eq!(active[0].category, "games");
+        assert_eq!(active[0].note.as_deref(), Some("homework done"));
+
+        // Revoke
+        assert!(store.revoke_grant(id).unwrap());
+        assert_eq!(store.list_active_grants().unwrap().len(), 0);
+
+        // Re-revoke is a no-op
+        assert!(!store.revoke_grant(id).unwrap());
+
+        // list_grants(include_expired=true) still sees the revoked row
+        let all = store.list_grants(true).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].revoked_at.is_some());
+    }
+
+    #[test]
+    fn test_grant_expiry_excluded_from_active_list() {
+        let store = create_test_store();
+        seed_child_device(&store);
+
+        // Already-expired grant
+        store.insert_grant(&NewGrant {
+            device_id: "child_ipad".to_string(),
+            category: "games".to_string(),
+            granted_at: Some("2000-01-01 00:00:00".to_string()),
+            expires_at: "2000-01-01 01:00:00".to_string(),
+            note: None,
+        }).unwrap();
+
+        assert_eq!(store.list_active_grants().unwrap().len(), 0);
+        assert_eq!(store.list_grants(true).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_grant_cascade_on_device_delete() {
+        let store = create_test_store();
+        seed_child_device(&store);
+
+        store.insert_grant(&NewGrant {
+            device_id: "child_ipad".to_string(),
+            category: "games".to_string(),
+            granted_at: None,
+            expires_at: "9999-12-31 23:59:59".to_string(),
+            note: None,
+        }).unwrap();
+
+        assert_eq!(store.list_grants(true).unwrap().len(), 1);
+        store.delete_device("child_ipad").unwrap();
+        assert_eq!(store.list_grants(true).unwrap().len(), 0);
     }
 }

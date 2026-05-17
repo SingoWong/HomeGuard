@@ -117,17 +117,19 @@ impl DeviceManager {
         self.devices.keys().map(|s| s.as_str()).collect()
     }
 
-    /// Get schedules for a device by IP
-    pub fn get_device_schedules(&self, ip: IpAddr) -> Vec<String> {
+    /// Get hard-block categories for a device by IP. These are always blocked
+    /// and can never be unlocked by a grant.
+    pub fn get_device_hard_blocklists(&self, ip: IpAddr) -> Vec<String> {
         self.get_device_by_ip(ip)
-            .map(|d| d.schedules.clone())
+            .map(|d| d.hard_blocklists.clone())
             .unwrap_or_default()
     }
 
-    /// Get extra blocklists for a device by IP
-    pub fn get_device_blocklists(&self, ip: IpAddr) -> Vec<String> {
+    /// Get grantable-block categories for a device by IP. These are blocked by
+    /// default but can be temporarily unlocked by an active grant.
+    pub fn get_device_grantable_blocklists(&self, ip: IpAddr) -> Vec<String> {
         self.get_device_by_ip(ip)
-            .map(|d| d.extra_blocklists.clone())
+            .map(|d| d.grantable_blocklists.clone())
             .unwrap_or_default()
     }
 }
@@ -155,8 +157,9 @@ mod tests {
                 mac: None,
                 name: "Child's iPad".to_string(),
                 device_type: DeviceType::Child,
-                schedules: vec!["school_hours".to_string()],
-                extra_blocklists: vec!["games".to_string(), "social".to_string()],
+                hard_blocklists: vec!["porn".to_string()],
+                grantable_blocklists: vec!["games".to_string(), "social".to_string()],
+                extra_blocklists: vec![],
             },
         );
 
@@ -167,7 +170,8 @@ mod tests {
                 mac: None,
                 name: "Parent's Phone".to_string(),
                 device_type: DeviceType::Adult,
-                schedules: vec![],
+                hard_blocklists: vec![],
+                grantable_blocklists: vec![],
                 extra_blocklists: vec![],
             },
         );
@@ -179,7 +183,8 @@ mod tests {
                 mac: None,
                 name: "Living Room TV".to_string(),
                 device_type: DeviceType::IoT,
-                schedules: vec![],
+                hard_blocklists: vec![],
+                grantable_blocklists: vec![],
                 extra_blocklists: vec![],
             },
         );
@@ -245,26 +250,25 @@ mod tests {
     }
 
     #[test]
-    fn test_get_device_schedules() {
+    fn test_get_device_hard_blocklists() {
         let devices = create_test_devices();
         let manager = DeviceManager::from_config(&devices);
 
         let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
-        let schedules = manager.get_device_schedules(child_ip);
-
-        assert_eq!(schedules, vec!["school_hours".to_string()]);
+        assert_eq!(
+            manager.get_device_hard_blocklists(child_ip),
+            vec!["porn".to_string()]
+        );
     }
 
     #[test]
-    fn test_get_device_blocklists() {
+    fn test_get_device_grantable_blocklists() {
         let devices = create_test_devices();
         let manager = DeviceManager::from_config(&devices);
 
         let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
-        let blocklists = manager.get_device_blocklists(child_ip);
-
         assert_eq!(
-            blocklists,
+            manager.get_device_grantable_blocklists(child_ip),
             vec!["games".to_string(), "social".to_string()]
         );
     }
@@ -294,7 +298,8 @@ mod tests {
                 mac: None,
                 name: "Bad Device".to_string(),
                 device_type: DeviceType::Unknown,
-                schedules: vec![],
+                hard_blocklists: vec![],
+                grantable_blocklists: vec![],
                 extra_blocklists: vec![],
             },
         );

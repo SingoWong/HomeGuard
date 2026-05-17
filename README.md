@@ -135,6 +135,7 @@ homeguard/
 | --------------------------------------------------------------- | ----------------------------------------- |
 | [00-overview.md](docs/00-overview.md)                           | Project overview and phase breakdown      |
 | [network.md](docs/network.md)                                   | End-to-end packet flow & PF redirect 原理 |
+| [parental-control.md](docs/parental-control.md)                 | Grant-based parental control + SQL cookbook |
 | [phase1-project-structure.md](docs/phase1-project-structure.md) | Project framework and configuration       |
 | [phase2-dns-service.md](docs/phase2-dns-service.md)             | DNS server, cache, FakeDNS                |
 | [phase3-rule-engine.md](docs/phase3-rule-engine.md)             | Rule engine design                        |
@@ -206,7 +207,16 @@ like `RULE-SET,blocklist/games.list,REJECT` are fine too. See
 
 After editing `rules.list` or any sub-file, restart the service (`sudo launchctl kickstart -k system/com.homeguard`); hot-reload is not implemented yet.
 
-### Parental Control
+### Parental Control (grant-based)
+
+HomeGuard v2 uses an **on-demand grant** model rather than fixed time
+schedules: a child device's "grantable" categories are blocked by default,
+and the parent issues time-bounded permissions via a one-liner `sqlite3`
+command when the kid asks. See [docs/parental-control.md](docs/parental-control.md)
+for the full data model + SQL cookbook.
+
+**TOML side (first-boot seed only)** — once devices land in SQLite, TOML edits
+to `[devices.*]` are ignored:
 
 ```toml
 [parental]
@@ -216,17 +226,40 @@ global_categories = ["malware"]
 default_policy = "allow"
 
 [devices.child_ipad]
-ip = "192.168.0.100"
+ip = "192.168.0.50"
 name = "Child iPad"
 device_type = "child"
-schedules = ["school_hours"]
-extra_blocklists = ["games", "social"]
+hard_blocklists      = ["porn", "violence"]   # always blocked
+grantable_blocklists = ["games", "social"]    # blocked unless an active grant
 
-[schedules.school_hours]
-days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-start = "08:00"
-end = "16:00"
+[devices.parent_phone]
+ip = "192.168.0.30"
+name = "Parent iPhone"
+device_type = "adult"                         # adults bypass all blocklists
 ```
+
+**Daily-use side (SQL one-liners)**:
+
+```bash
+DB=/var/lib/homeguard/config.db
+
+# Open games for 1 hour
+sqlite3 $DB "INSERT INTO grants (device_id, category, expires_at)
+             VALUES ('child_ipad', 'games', datetime('now', '+1 hour'));"
+
+# See what's currently allowed
+sqlite3 -header -column $DB \
+  "SELECT id, device_id, category,
+          datetime(expires_at, 'localtime') AS expires_local
+   FROM grants
+   WHERE revoked_at IS NULL AND expires_at > datetime('now');"
+
+# Cut a grant short
+sqlite3 $DB "UPDATE grants SET revoked_at = datetime('now') WHERE id = 42;"
+```
+
+Cache refresh is 5s, so `INSERT` / `UPDATE` take effect within 5 seconds
+without restarting the service.
 
 ### Shadowsocks Proxy
 

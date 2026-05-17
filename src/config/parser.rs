@@ -114,41 +114,6 @@ fn validate_config(config: &Config) -> Result<(), ConfigError> {
         }
     }
 
-    // Validate schedules
-    for (name, schedule) in &config.schedules {
-        if schedule.days.is_empty() {
-            return Err(ConfigError::ValidationError(format!(
-                "Schedule '{}' has no days specified",
-                name
-            )));
-        }
-        // Validate time format
-        parse_time(&schedule.start).map_err(|e| {
-            ConfigError::ValidationError(format!(
-                "Schedule '{}' has invalid start time: {}",
-                name, e
-            ))
-        })?;
-        parse_time(&schedule.end).map_err(|e| {
-            ConfigError::ValidationError(format!(
-                "Schedule '{}' has invalid end time: {}",
-                name, e
-            ))
-        })?;
-    }
-
-    // Validate device schedules reference existing schedules
-    for (device_name, device) in &config.devices {
-        for schedule_name in &device.schedules {
-            if !config.schedules.contains_key(schedule_name) {
-                return Err(ConfigError::ValidationError(format!(
-                    "Device '{}' references unknown schedule '{}'",
-                    device_name, schedule_name
-                )));
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -172,11 +137,6 @@ fn validate_ss_method(method: &str) -> Result<(), String> {
     }
 }
 
-/// Parse time string (HH:MM format)
-fn parse_time(time_str: &str) -> Result<chrono::NaiveTime, String> {
-    chrono::NaiveTime::parse_from_str(time_str, "%H:%M")
-        .map_err(|e| format!("Invalid time format (expected HH:MM): {}", e))
-}
 
 #[cfg(test)]
 mod tests {
@@ -273,24 +233,21 @@ rules_dir = "./rules"
 geoip_db = "./data/GeoLite2-Country.mmdb"
 rule_file = "./rules.list"
 
-[schedules.school_hours]
-days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-start = "08:00"
-end = "16:00"
-
 [devices.child_ipad]
 ip = "192.168.0.100"
 name = "Child iPad"
 device_type = "child"
-schedules = ["school_hours"]
-extra_blocklists = ["games"]
+hard_blocklists = ["porn"]
+grantable_blocklists = ["games"]
 "#;
         let config = load_config_from_str(config_str).unwrap();
         assert_eq!(config.general.log_level, "debug");
         assert_eq!(config.proxy.shadowsocks.len(), 1);
         assert_eq!(config.proxy.shadowsocks[0].name, "ss-hk");
-        assert!(config.schedules.contains_key("school_hours"));
         assert!(config.devices.contains_key("child_ipad"));
+        let dev = &config.devices["child_ipad"];
+        assert_eq!(dev.hard_blocklists, vec!["porn".to_string()]);
+        assert_eq!(dev.grantable_blocklists, vec!["games".to_string()]);
     }
 
     #[test]

@@ -76,25 +76,46 @@ rules_dir = "./rules"
 # GeoIP database path (optional, enables GEOIP rules)
 # geoip_db = "./data/GeoLite2-Country.mmdb"
 
-# Time schedules
-# [schedules.school_hours]
-# days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-# start = "08:00"
-# end = "16:00"
+# ─────────────────────────────────────────────────────────────────────────────
+# Device configurations (parental control — first-boot seed only)
+# ─────────────────────────────────────────────────────────────────────────────
+# As of v2 (grant-based parental control), this section is read **only on
+# the first run** when the SQLite `devices` table is empty. After seeding,
+# the SQLite table is authoritative; further edits here are ignored (a
+# warning is logged). Add/remove/edit devices via `sqlite3` after first boot —
+# see docs/parental-control.md for SQL cookbook.
+#
+# Two blocklist tiers per device:
+#   hard_blocklists      — always blocked, no grant can override
+#                          (e.g. porn / violence — categories under
+#                          blocklists/categories/<name>.list that match
+#                          something the kid should NEVER reach)
+#   grantable_blocklists — blocked by default; an active row in the SQLite
+#                          `grants` table (issued by the parent via
+#                          `INSERT INTO grants ...`) temporarily allows
+#                          access until expires_at
+#
+# Daily-life flow:
+#   1. Kid asks the parent: "can I play games for an hour?"
+#   2. Parent runs from the Mac mini's shell:
+#        sqlite3 /var/lib/homeguard/config.db \
+#          "INSERT INTO grants (device_id, category, expires_at) \
+#           VALUES ('child_ipad', 'games', datetime('now', '+1 hour'));"
+#   3. Within 5 seconds (cache refresh window), the kid's iPad can reach
+#      games sites. After 1 hour, it's blocked again automatically.
 
-# [schedules.sleep_time]
-# days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-# start = "22:00"
-# end = "07:00"
-
-# Device configurations
 # [devices.child_ipad]
-# ip = "192.168.0.100"
-# mac = "AA:BB:CC:DD:EE:FF"
+# ip   = "192.168.0.50"
+# mac  = "AA:BB:CC:DD:EE:FF"
 # name = "Child iPad"
 # device_type = "child"
-# schedules = ["school_hours", "sleep_time"]
-# extra_blocklists = ["games", "social"]
+# hard_blocklists      = ["porn", "violence"]
+# grantable_blocklists = ["games", "social"]
+
+# [devices.parent_phone]
+# ip   = "192.168.0.30"
+# name = "Parent iPhone"
+# device_type = "adult"     # Adult devices bypass all blocklists
 
 # Parental control settings
 [parental]

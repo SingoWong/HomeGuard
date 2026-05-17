@@ -1,18 +1,23 @@
 //! Parental Controller
 //!
-//! Main controller that coordinates device management, schedule evaluation,
-//! and blocklist checking for parental control.
+//! Coordinates device identification, hard/grantable blocklist evaluation,
+//! and grant lookups to answer one question: *should this domain request
+//! from this source IP be blocked right now?*
+//!
+//! As of v2 this controller is **grant-based**, not schedule-based: each
+//! child device declares two category lists — `hard_blocklists` (always
+//! blocked) and `grantable_blocklists` (blocked by default, openable via an
+//! active row in the SQLite `grants` table).
 
 use std::net::IpAddr;
-use std::path::Path;
+use std::sync::Arc;
 
 use tracing::{debug, info};
 
 use super::blocklist::BlocklistManager;
 use super::device::{DeviceInfo, DeviceManager};
-use super::schedule::ScheduleManager;
-use crate::config::{Config, DeviceType};
-use crate::error::Result;
+use super::grant::GrantStore;
+use crate::config::DeviceType;
 
 /// Default policy for unknown devices
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -72,16 +77,18 @@ impl ParentalDecision {
 
 /// Main parental control controller
 pub struct ParentalController {
-    /// Device manager
+    /// Device manager (IP → device record)
     device_manager: DeviceManager,
 
-    /// Schedule manager
-    schedule_manager: ScheduleManager,
-
-    /// Blocklist manager
+    /// Blocklist manager (file-backed; category → domain sets)
     blocklist_manager: BlocklistManager,
 
-    /// Global categories to block for ALL devices (including adults)
+    /// Active grants store (SQLite-backed; (device, category) → expiry).
+    /// Optional so tests and pre-v2 callers can construct a controller without
+    /// a real DB; in production it's always Some after main.rs wires it up.
+    grant_store: Option<Arc<GrantStore>>,
+
+    /// Global categories blocked for ALL devices (including adults)
     global_categories: Vec<String>,
 
     /// Default policy for unknown devices
@@ -93,47 +100,25 @@ pub struct ParentalController {
 }
 
 impl ParentalController {
-    /// Create from configuration
-    pub fn from_config(config: &Config, blocklist_dir: Option<&Path>) -> Result<Self> {
-        // Initialize managers
-        let device_manager = DeviceManager::from_config(&config.devices);
-        let schedule_manager = ScheduleManager::from_config(&config.schedules);
-
-        // Load blocklists
-        let mut blocklist_manager = BlocklistManager::new();
-        if let Some(dir) = blocklist_dir {
-            blocklist_manager.load_directory(dir)?;
-        }
-
-        info!(
-            "ParentalController initialized: {} devices, {} schedules, {} global domains",
-            config.devices.len(),
-            config.schedules.len(),
-            blocklist_manager.global_count()
-        );
-
-        Ok(Self {
-            device_manager,
-            schedule_manager,
-            blocklist_manager,
-            global_categories: vec![], // Will be configurable in future
-            default_policy: ParentalPolicy::Allow,
-            log_blocked: true,
-        })
-    }
-
-    /// Create with custom settings
+    /// Construct with explicit dependencies. main.rs uses this after loading
+    /// devices from SQLite and opening the GrantStore.
     pub fn new(
         device_manager: DeviceManager,
-        schedule_manager: ScheduleManager,
         blocklist_manager: BlocklistManager,
+        grant_store: Option<Arc<GrantStore>>,
         global_categories: Vec<String>,
         default_policy: ParentalPolicy,
     ) -> Self {
+        info!(
+            "ParentalController initialized: {} devices, {} global domains, grants={}",
+            device_manager.device_ids().len(),
+            blocklist_manager.global_count(),
+            if grant_store.is_some() { "enabled" } else { "disabled" }
+        );
         Self {
             device_manager,
-            schedule_manager,
             blocklist_manager,
+            grant_store,
             global_categories,
             default_policy,
             log_blocked: true,
@@ -150,16 +135,27 @@ impl ParentalController {
         self.default_policy = policy;
     }
 
-    /// Check if a domain access should be allowed for a device
+    /// Check if a domain access should be allowed for a device.
+    ///
+    /// Order of evaluation (first match wins):
+    /// 1. Global blocklist (always-block list applied to everyone)
+    /// 2. Global categories (named blocklists applied to everyone)
+    /// 3. Unknown device → default policy
+    /// 4. Adult device → always allow
+    /// 5. Any hard_blocklists category matches → block (no grant can override)
+    /// 6. Any grantable_blocklists category matches:
+    ///    - active grant for (device, category) → allow
+    ///    - no grant → block
+    /// 7. Otherwise → allow
     pub fn check_access(&self, source_ip: IpAddr, domain: &str) -> ParentalDecision {
         let domain = domain.trim_end_matches('.').to_lowercase();
 
-        // Step 1: Check global blocklist (applies to ALL traffic)
+        // 1. Global blocklist
         if self.blocklist_manager.is_blocked_globally(&domain) {
             return ParentalDecision::block("Global blocklist");
         }
 
-        // Step 2: Check global categories (applies to ALL devices including adults)
+        // 2. Global categories
         if !self.global_categories.is_empty()
             && self
                 .blocklist_manager
@@ -171,59 +167,49 @@ impl ParentalController {
             ));
         }
 
-        // Step 3: Get device info
+        // 3. Identify device
         let device = match self.device_manager.get_device_by_ip(source_ip) {
             Some(d) => d,
-            None => {
-                // Unknown device - apply default policy
-                return self.apply_default_policy(&domain);
-            }
+            None => return self.apply_default_policy(&domain),
         };
+        let device_id = self
+            .device_manager
+            .get_device_id_by_ip(source_ip)
+            .unwrap_or("");
 
-        // Step 4: Adults bypass device-specific controls
+        // 4. Adults bypass device-specific controls
         if device.device_type == DeviceType::Adult {
             debug!("Adult device {} - allowing {}", source_ip, domain);
             return ParentalDecision::allow();
         }
 
-        // Step 5: Check if any schedule is active for this device
-        let schedules_active = if device.schedules.is_empty() {
-            // No schedules configured - device-specific rules always apply
-            true
-        } else {
-            // Check if ANY configured schedule is active
-            self.schedule_manager.any_active(&device.schedules)
-        };
-
-        if schedules_active {
-            // Step 6: Check device-specific blocklists
-            if !device.extra_blocklists.is_empty()
-                && self
-                    .blocklist_manager
-                    .is_in_any_category(&domain, &device.extra_blocklists)
-            {
-                let active_schedules: Vec<&str> = device
-                    .schedules
-                    .iter()
-                    .filter(|s| self.schedule_manager.is_active(s))
-                    .map(|s| s.as_str())
-                    .collect();
-
-                let reason = if active_schedules.is_empty() {
-                    format!("Device blocklist: {}", device.extra_blocklists.join(", "))
-                } else {
-                    format!(
-                        "Device blocklist during {}: {}",
-                        active_schedules.join(", "),
-                        device.extra_blocklists.join(", ")
-                    )
-                };
-
-                return ParentalDecision::block(reason);
+        // 5. Hard blocklists — find the category that hit (if any) and block
+        for category in &device.hard_blocklists {
+            if self.blocklist_manager.is_in_category(&domain, category) {
+                return ParentalDecision::block(format!("hard:{}", category));
             }
         }
 
-        // Allow by default
+        // 6. Grantable blocklists — block by default; active grant unblocks
+        for category in &device.grantable_blocklists {
+            if self.blocklist_manager.is_in_category(&domain, category) {
+                let granted = self
+                    .grant_store
+                    .as_ref()
+                    .map(|gs| gs.has_active(device_id, category))
+                    .unwrap_or(false);
+                if granted {
+                    debug!(
+                        "Active grant unblocks {} for device {} (category {})",
+                        domain, device_id, category
+                    );
+                    return ParentalDecision::allow();
+                }
+                return ParentalDecision::block(format!("grantable:{}", category));
+            }
+        }
+
+        // 7. Default allow
         ParentalDecision::allow()
     }
 
@@ -251,11 +237,6 @@ impl ParentalController {
         &self.device_manager
     }
 
-    /// Get reference to schedule manager
-    pub fn schedule_manager(&self) -> &ScheduleManager {
-        &self.schedule_manager
-    }
-
     /// Get reference to blocklist manager
     pub fn blocklist_manager(&self) -> &BlocklistManager {
         &self.blocklist_manager
@@ -271,8 +252,8 @@ impl Default for ParentalController {
     fn default() -> Self {
         Self {
             device_manager: DeviceManager::default(),
-            schedule_manager: ScheduleManager::from_config(&std::collections::HashMap::new()),
             blocklist_manager: BlocklistManager::new(),
+            grant_store: None,
             global_categories: vec![],
             default_policy: ParentalPolicy::Allow,
             log_blocked: true,
@@ -283,7 +264,9 @@ impl Default for ParentalController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DeviceConfig, Schedule, Weekday};
+    use crate::config::DeviceConfig;
+    use crate::storage::{ConfigStore, Database, NewDevice, NewGrant};
+    use parking_lot::Mutex;
     use std::collections::HashMap;
 
     fn create_test_device_manager() -> DeviceManager {
@@ -296,8 +279,9 @@ mod tests {
                 mac: None,
                 name: "Child's Device".to_string(),
                 device_type: DeviceType::Child,
-                schedules: vec!["always".to_string()],
-                extra_blocklists: vec!["games".to_string()],
+                hard_blocklists: vec!["porn".to_string()],
+                grantable_blocklists: vec!["games".to_string()],
+                extra_blocklists: vec![],
             },
         );
 
@@ -308,7 +292,8 @@ mod tests {
                 mac: None,
                 name: "Adult's Device".to_string(),
                 device_type: DeviceType::Adult,
-                schedules: vec![],
+                hard_blocklists: vec![],
+                grantable_blocklists: vec![],
                 extra_blocklists: vec![],
             },
         );
@@ -316,43 +301,31 @@ mod tests {
         DeviceManager::from_config(&devices)
     }
 
-    fn create_test_schedule_manager() -> ScheduleManager {
-        let mut schedules = HashMap::new();
-
-        // Schedule that's always active
-        schedules.insert(
-            "always".to_string(),
-            Schedule {
-                days: vec![
-                    Weekday::Mon,
-                    Weekday::Tue,
-                    Weekday::Wed,
-                    Weekday::Thu,
-                    Weekday::Fri,
-                    Weekday::Sat,
-                    Weekday::Sun,
-                ],
-                start: "00:00".to_string(),
-                end: "23:59".to_string(),
-            },
-        );
-
-        ScheduleManager::from_config(&schedules)
-    }
-
     fn create_test_blocklist_manager() -> BlocklistManager {
         let mut manager = BlocklistManager::new();
-
-        // Global blocklist
         manager.add_global("malware.com");
         manager.add_global("phishing.org");
-
-        // Category blocklists
+        manager.add_to_category("porn1.com", "porn");
         manager.add_to_category("game1.com", "games");
         manager.add_to_category("game2.org", "games");
         manager.add_to_category("social1.com", "social");
-
         manager
+    }
+
+    fn make_grant_store_with_device(device_id: &str) -> (Arc<GrantStore>, Arc<Mutex<ConfigStore>>) {
+        let db = Database::open_in_memory().unwrap();
+        let store = ConfigStore::new(db);
+        // Seed the device so FK on grants resolves
+        store.insert_device(&NewDevice {
+            id: device_id.to_string(),
+            name: device_id.to_string(),
+            ip: Some("192.168.0.100".to_string()),
+            mac: None,
+            device_type: "child".to_string(),
+        }).unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let gs = GrantStore::open(store.clone()).unwrap();
+        (gs, store)
     }
 
     #[test]
@@ -369,11 +342,11 @@ mod tests {
     }
 
     #[test]
-    fn test_global_blocklist() {
+    fn test_global_blocklist_blocks_everyone() {
         let controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            None,
             vec![],
             ParentalPolicy::Allow,
         );
@@ -382,157 +355,184 @@ mod tests {
         let adult_ip: IpAddr = "192.168.0.50".parse().unwrap();
         let unknown_ip: IpAddr = "192.168.0.99".parse().unwrap();
 
-        // Global blocklist should block for ALL devices
         assert!(controller.check_access(child_ip, "malware.com").is_blocked());
         assert!(controller.check_access(adult_ip, "malware.com").is_blocked());
-        assert!(controller
-            .check_access(unknown_ip, "malware.com")
-            .is_blocked());
+        assert!(controller.check_access(unknown_ip, "malware.com").is_blocked());
     }
 
     #[test]
-    fn test_device_specific_blocklist() {
+    fn test_hard_blocklist_always_blocks_child_even_with_grant() {
+        let (gs, store) = make_grant_store_with_device("child_device");
+
         let controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            Some(gs.clone()),
+            vec![],
+            ParentalPolicy::Allow,
+        );
+
+        // Issue an active grant on `porn` (hard category) — should be ignored.
+        store.lock().insert_grant(&NewGrant {
+            device_id: "child_device".to_string(),
+            category: "porn".to_string(),
+            granted_at: None,
+            expires_at: "9999-12-31 23:59:59".to_string(),
+            note: None,
+        }).unwrap();
+        gs.refresh().unwrap();
+
+        let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
+        assert!(controller.check_access(child_ip, "porn1.com").is_blocked());
+        assert_eq!(
+            controller.check_access(child_ip, "porn1.com").reason(),
+            Some("hard:porn")
+        );
+    }
+
+    #[test]
+    fn test_grantable_blocked_by_default_allowed_with_active_grant() {
+        let (gs, store) = make_grant_store_with_device("child_device");
+
+        let controller = ParentalController::new(
+            create_test_device_manager(),
+            create_test_blocklist_manager(),
+            Some(gs.clone()),
             vec![],
             ParentalPolicy::Allow,
         );
 
         let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
-        let adult_ip: IpAddr = "192.168.0.50".parse().unwrap();
 
-        // Child device should have games blocked
+        // Default state: games is grantable -> blocked
         assert!(controller.check_access(child_ip, "game1.com").is_blocked());
-        assert!(controller.check_access(child_ip, "game2.org").is_blocked());
+        assert_eq!(
+            controller.check_access(child_ip, "game1.com").reason(),
+            Some("grantable:games")
+        );
 
-        // Adult device should NOT have games blocked
+        // Issue grant on games, refresh
+        let id = store.lock().insert_grant(&NewGrant {
+            device_id: "child_device".to_string(),
+            category: "games".to_string(),
+            granted_at: None,
+            expires_at: "9999-12-31 23:59:59".to_string(),
+            note: None,
+        }).unwrap();
+        gs.refresh().unwrap();
+
+        // Now allowed
+        assert!(controller.check_access(child_ip, "game1.com").is_allowed());
+        assert!(controller.check_access(child_ip, "game2.org").is_allowed());
+
+        // Other grantable categories not in this grant remain blocked
+        // (social isn't even in child_device's grantable_blocklists, but
+        // social1.com isn't in games either; either way blocked or allowed
+        // by absence — controller falls through to allow since social isn't
+        // in child's grantable list at all)
+        assert!(controller.check_access(child_ip, "social1.com").is_allowed());
+
+        // Revoke
+        store.lock().revoke_grant(id).unwrap();
+        gs.refresh().unwrap();
+        assert!(controller.check_access(child_ip, "game1.com").is_blocked());
+    }
+
+    #[test]
+    fn test_adult_device_bypasses_all_device_rules() {
+        let (gs, _store) = make_grant_store_with_device("child_device");
+
+        let controller = ParentalController::new(
+            create_test_device_manager(),
+            create_test_blocklist_manager(),
+            Some(gs),
+            vec![],
+            ParentalPolicy::Allow,
+        );
+
+        let adult_ip: IpAddr = "192.168.0.50".parse().unwrap();
+        // Adult sees no hard/grantable enforcement
+        assert!(controller.check_access(adult_ip, "porn1.com").is_allowed());
         assert!(controller.check_access(adult_ip, "game1.com").is_allowed());
-        assert!(controller.check_access(adult_ip, "game2.org").is_allowed());
-
-        // Child should have access to unblocked sites
-        assert!(controller.check_access(child_ip, "allowed.com").is_allowed());
     }
 
     #[test]
     fn test_unknown_device_default_allow() {
         let controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            None,
             vec![],
             ParentalPolicy::Allow,
         );
 
         let unknown_ip: IpAddr = "192.168.0.99".parse().unwrap();
-
-        // Unknown device with Allow policy - should allow non-global-blocked sites
         assert!(controller.check_access(unknown_ip, "game1.com").is_allowed());
         assert!(controller.check_access(unknown_ip, "anything.com").is_allowed());
-
         // But global blocklist still applies
-        assert!(controller
-            .check_access(unknown_ip, "malware.com")
-            .is_blocked());
+        assert!(controller.check_access(unknown_ip, "malware.com").is_blocked());
     }
 
     #[test]
     fn test_unknown_device_default_block_all() {
         let controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            None,
             vec![],
             ParentalPolicy::BlockAll,
         );
 
         let unknown_ip: IpAddr = "192.168.0.99".parse().unwrap();
-
-        // Unknown device with BlockAll policy - should block everything
         assert!(controller.check_access(unknown_ip, "game1.com").is_blocked());
-        assert!(controller
-            .check_access(unknown_ip, "anything.com")
-            .is_blocked());
+        assert!(controller.check_access(unknown_ip, "anything.com").is_blocked());
     }
 
     #[test]
-    fn test_global_categories() {
+    fn test_global_categories_block_everyone() {
         let mut controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            None,
             vec![],
             ParentalPolicy::Allow,
         );
-
-        // Set social as global category (blocked for everyone)
         controller.set_global_categories(vec!["social".to_string()]);
 
         let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
         let adult_ip: IpAddr = "192.168.0.50".parse().unwrap();
-
-        // Social should be blocked for both child and adult
-        assert!(controller
-            .check_access(child_ip, "social1.com")
-            .is_blocked());
-        assert!(controller
-            .check_access(adult_ip, "social1.com")
-            .is_blocked());
+        assert!(controller.check_access(child_ip, "social1.com").is_blocked());
+        assert!(controller.check_access(adult_ip, "social1.com").is_blocked());
     }
 
     #[test]
-    fn test_case_insensitivity() {
+    fn test_case_and_trailing_dot_normalization() {
         let controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            None,
             vec![],
             ParentalPolicy::Allow,
         );
 
         let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
-
-        // Domain matching should be case-insensitive
         assert!(controller.check_access(child_ip, "GAME1.COM").is_blocked());
-        assert!(controller.check_access(child_ip, "Game1.Com").is_blocked());
-        assert!(controller.check_access(child_ip, "MALWARE.COM").is_blocked());
-    }
-
-    #[test]
-    fn test_trailing_dot_removal() {
-        let controller = ParentalController::new(
-            create_test_device_manager(),
-            create_test_schedule_manager(),
-            create_test_blocklist_manager(),
-            vec![],
-            ParentalPolicy::Allow,
-        );
-
-        let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
-
-        // Trailing dot (FQDN) should be handled
-        assert!(controller.check_access(child_ip, "game1.com.").is_blocked());
-        assert!(controller
-            .check_access(child_ip, "malware.com.")
-            .is_blocked());
+        assert!(controller.check_access(child_ip, "Game1.Com.").is_blocked());
+        assert!(controller.check_access(child_ip, "MALWARE.COM.").is_blocked());
     }
 
     #[test]
     fn test_device_info() {
         let controller = ParentalController::new(
             create_test_device_manager(),
-            create_test_schedule_manager(),
             create_test_blocklist_manager(),
+            None,
             vec![],
             ParentalPolicy::Allow,
         );
 
         let child_ip: IpAddr = "192.168.0.100".parse().unwrap();
-        let info = controller.get_device_info(child_ip);
-
-        assert!(info.is_some());
-        let info = info.unwrap();
+        let info = controller.get_device_info(child_ip).unwrap();
         assert_eq!(info.id, "child_device");
         assert_eq!(info.name, "Child's Device");
         assert_eq!(info.device_type, DeviceType::Child);

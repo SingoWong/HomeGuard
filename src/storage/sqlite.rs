@@ -7,7 +7,7 @@ use std::path::Path;
 use tracing::{debug, info};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Database wrapper
 pub struct Database {
@@ -80,6 +80,9 @@ impl Database {
         // Apply migrations
         if current_version < 1 {
             self.migrate_v1()?;
+        }
+        if current_version < 2 {
+            self.migrate_v2()?;
         }
 
         info!("Database schema is up to date (version {})", SCHEMA_VERSION);
@@ -222,6 +225,62 @@ impl Database {
         info!("Migration v1 applied successfully");
         Ok(())
     }
+
+    /// Migration to version 2 — grant-based parental control.
+    ///
+    /// Adds:
+    /// * `grants` — time-bounded permissions issued by the parent that
+    ///   temporarily unblock a `grantable` category for a device.
+    /// * Rebuilds `device_blocklists` to key off category **name** (not
+    ///   `blocklists(id)`) and to carry a `mode` discriminator (`hard` /
+    ///   `grantable`). The v1 shape FK'd into a `blocklists` table that was
+    ///   never populated in practice (Phase 7 was code-only), so dropping and
+    ///   recreating is safe and produces a cleaner schema than ALTER + dead FK.
+    ///
+    /// `schedules` / `device_schedules` are left in place as no-op tables.
+    /// They remain only as a migration anchor and may be dropped in v3.
+    fn migrate_v2(&mut self) -> SqliteResult<()> {
+        info!("Applying migration v2: grant-based parental control");
+
+        let tx = self.conn.transaction()?;
+
+        // grants table
+        tx.execute_batch(
+            "CREATE TABLE grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id  TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                category   TEXT NOT NULL,
+                granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                note       TEXT
+            );
+            CREATE INDEX idx_grants_active
+                ON grants(device_id, category, expires_at)
+                WHERE revoked_at IS NULL;",
+        )?;
+
+        // Rebuild device_blocklists: drop old (empty in any real deployment) and
+        // recreate with `category` text column + `mode` discriminator. No data
+        // migration is needed because Phase 7 was never wired into main.rs.
+        tx.execute_batch(
+            "DROP TABLE device_blocklists;
+             CREATE TABLE device_blocklists (
+                device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                category  TEXT NOT NULL,
+                mode      TEXT NOT NULL CHECK (mode IN ('hard', 'grantable')),
+                PRIMARY KEY (device_id, category)
+             );",
+        )?;
+
+        // Record migration
+        tx.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
+
+        tx.commit()?;
+
+        info!("Migration v2 applied successfully");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +308,46 @@ mod tests {
         assert!(tables.contains(&"proxy_groups".to_string()));
         assert!(tables.contains(&"rules".to_string()));
         assert!(tables.contains(&"global_config".to_string()));
+        // v2 additions
+        assert!(tables.contains(&"grants".to_string()));
+    }
+
+    #[test]
+    fn test_v2_device_blocklists_shape() {
+        let db = Database::open_in_memory().expect("Failed to open database");
+
+        // pragma table_info returns (cid, name, type, notnull, dflt_value, pk)
+        let cols: Vec<String> = db
+            .conn()
+            .prepare("SELECT name FROM pragma_table_info('device_blocklists')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for expected in &["device_id", "category", "mode"] {
+            assert!(cols.contains(&expected.to_string()), "device_blocklists missing column {}; got {:?}", expected, cols);
+        }
+        assert!(!cols.contains(&"blocklist_id".to_string()), "device_blocklists still has old blocklist_id column");
+    }
+
+    #[test]
+    fn test_v2_grants_table_shape() {
+        let db = Database::open_in_memory().expect("Failed to open database");
+
+        let cols: Vec<String> = db
+            .conn()
+            .prepare("SELECT name FROM pragma_table_info('grants') ORDER BY cid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for expected in &["id", "device_id", "category", "granted_at", "expires_at", "revoked_at", "note"] {
+            assert!(cols.contains(&expected.to_string()), "grants missing column {}", expected);
+        }
     }
 
     #[test]

@@ -1,20 +1,20 @@
 //! Parental Control Module
 //!
-//! Provides device-aware access control with time-based restrictions.
+//! Provides device-aware access control with grant-based authorizations.
 //!
 //! Components:
 //! - DeviceManager: Identifies devices by IP
-//! - ScheduleManager: Evaluates time-based schedules
-//! - BlocklistManager: Manages domain blocklists
+//! - BlocklistManager: Manages domain blocklists (loaded from files)
+//! - GrantStore: Tracks active time-bounded permissions (SQLite-backed)
 //! - ParentalController: Coordinates all components
 
 pub mod blocklist;
 pub mod controller;
 pub mod device;
-pub mod schedule;
+pub mod grant;
 
 // Re-export main types
 pub use blocklist::BlocklistManager;
 pub use controller::{ParentalController, ParentalDecision, ParentalPolicy};
 pub use device::DeviceManager;
-pub use schedule::ScheduleManager;
+pub use grant::GrantStore;

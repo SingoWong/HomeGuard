@@ -1,1 +1,22 @@
 /target
+
+# Runtime SQLite database — created on first launch, contains devices + grants.
+# Never commit: it's per-deployment state, may carry encrypted secrets, and
+# is rebuilt automatically from migrations + the [devices.*] seed in TOML.
+/data
+/var
+
+# Auto-generated category blocklists. Built by scripts/update-blocklists.sh
+# from UT1 (https://dsi.ut-capitole.fr/blacklists/) and Hagezi
+# (https://github.com/hagezi/dns-blocklists). Don't commit:
+#   - large (malware.list alone is ~26 MB; weekly diffs would bloat history)
+#   - license-encumbered (UT1 = non-commercial + attribution; Hagezi = GPL-3.0)
+#   - generated content doesn't belong in source control
+# Run scripts/update-blocklists.sh after cloning to populate.
+config/blocklists/categories/*.list
+
+# But DO track manually-curated category lists (the ones you author by hand —
+# typically games/social — see config/blocklists/categories/README.md).
+!config/blocklists/categories/games.list
+!config/blocklists/categories/social.list
+!config/blocklists/categories/README.md

@@ -123,9 +123,9 @@ impl BlocklistManager {
     /// Load all blocklists from a directory
     ///
     /// Directory structure:
-    /// - global/*.txt -> global blocklists
-    /// - categories/<name>.txt -> category blocklists
-    /// - *.txt at root -> global blocklists
+    /// - global/*.list  (or *.txt) -> global blocklists
+    /// - categories/<name>.list  (or .txt) -> category blocklists
+    /// - *.list  (or *.txt) at root -> global blocklists
     pub fn load_directory(&mut self, dir: &Path) -> Result<()> {
         if !dir.exists() {
             warn!("Blocklist directory does not exist: {}", dir.display());
@@ -135,7 +135,7 @@ impl BlocklistManager {
         let mut total_global = 0;
         let mut total_categories = 0;
 
-        // Load global blocklists (root level .txt files)
+        // Load global blocklists (root level .list/.txt files)
         for entry in std::fs::read_dir(dir).map_err(|e| {
             HomeGuardError::Io(std::io::Error::new(
                 e.kind(),
@@ -145,7 +145,7 @@ impl BlocklistManager {
             let entry = entry.map_err(|e| HomeGuardError::Io(e))?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "txt") {
+            if path.is_file() && is_blocklist_file(&path) {
                 match self.load_file(&path, None) {
                     Ok(count) => total_global += count,
                     Err(e) => warn!("Failed to load blocklist '{}': {}", path.display(), e),
@@ -160,7 +160,7 @@ impl BlocklistManager {
                 let entry = entry.map_err(|e| HomeGuardError::Io(e))?;
                 let path = entry.path();
 
-                if path.is_file() && path.extension().map_or(false, |ext| ext == "txt") {
+                if path.is_file() && is_blocklist_file(&path) {
                     match self.load_file(&path, None) {
                         Ok(count) => total_global += count,
                         Err(e) => warn!("Failed to load blocklist '{}': {}", path.display(), e),
@@ -176,7 +176,7 @@ impl BlocklistManager {
                 let entry = entry.map_err(|e| HomeGuardError::Io(e))?;
                 let path = entry.path();
 
-                if path.is_file() && path.extension().map_or(false, |ext| ext == "txt") {
+                if path.is_file() && is_blocklist_file(&path) {
                     // Category name is filename without extension
                     let category = path
                         .file_stem()
@@ -312,6 +312,16 @@ impl Default for BlocklistManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// True if a path looks like a blocklist file we should load.
+/// Accepts `.list` (canonical, matches `rules.list` convention) and `.txt`
+/// (legacy, kept for backwards compatibility with v1 layouts).
+fn is_blocklist_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("list") | Some("txt")
+    )
 }
 
 #[cfg(test)]
